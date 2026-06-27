@@ -230,7 +230,7 @@ This stage should never modify the original job.
 
 # Milestone 8 — Answer Generation
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
@@ -244,6 +244,18 @@ Inputs:
 * company
 
 Outputs should be editable before submission.
+
+## Deliverables
+
+* `src/workflow/` package
+* `AnswerGenerator` class — generates application answers via LLM
+* Prompt variables built from `Job` and `Profile`
+* Follows `_get_resume_path()` pattern from `JobEvaluator` for config-based resume discovery
+
+## Definition of Done
+
+* Tests pass (6 answer tests, 91 total)
+* Lint passes
 
 ---
 
