@@ -31,6 +31,22 @@ class LoggingConfig(BaseModel):
     file: str | None = "storage/app.log"
 
 
+class GreenhouseConfig(BaseModel):
+    enabled: bool = False
+    board_slugs: list[str] = []
+
+
+class LeverConfig(BaseModel):
+    enabled: bool = False
+    company_slugs: list[str] = []
+
+
+class LinkedInConfig(BaseModel):
+    enabled: bool = False
+    keywords: list[str] = []
+    location: str | None = None
+
+
 class AppConfig(BaseModel):
     name: str = "job-bot"
     data_dir: str = "storage"
@@ -39,6 +55,9 @@ class AppConfig(BaseModel):
 class Config(BaseModel):
     app: AppConfig = AppConfig()
     browser: BrowserConfig = BrowserConfig()
+    greenhouse: GreenhouseConfig = GreenhouseConfig()
+    lever: LeverConfig = LeverConfig()
+    linkedin: LinkedInConfig = LinkedInConfig()
     llm: LLMConfig = LLMConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()

@@ -3,11 +3,24 @@ app:
   data_dir: storage
 
 browser:
-  headless: true
+  headless: false
   timeout: 30000
   viewport:
     width: 1280
     height: 800
+
+greenhouse:
+  enabled: false
+  board_slugs: []
+
+lever:
+  enabled: false
+  company_slugs: []
+
+linkedin:
+  enabled: false
+  keywords: []
+  location: null
 
 llm:
   provider: ollama

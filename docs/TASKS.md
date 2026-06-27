@@ -16,7 +16,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 **Current Phase**
 
-> ✅ MVP Complete
+> ✅ Milestone 13 — Additional Sources Complete
 
 ---
 
@@ -352,19 +352,45 @@ Future responsibilities:
 
 # Milestone 13 — Additional Sources
 
-Status: 🔒 Locked
+Status: ✅ Complete
 
-Future plugins:
+## Goals
 
-* LinkedIn
-* Gmail
+Add more job source plugins.
+
+Each source must implement the existing `Source` interface and return normalized `Job` objects.
+
+## Sources
+
+* Greenhouse — `boards.greenhouse.io/{company}` public job boards
+* Lever — `jobs.lever.co/{company}` public job boards
+* LinkedIn — `linkedin.com/jobs/search/` public job listings
+
+## Future Sources (deferred)
+
+* Wellfound anti-detection — stealth plugins, proxy rotation, fingerprint evasion
+* Manual job URL input — user provides a list of URLs, pipeline scrapes and processes them
+* Gmail — job confirmation emails
 * Naukri
-* Greenhouse
-* Lever
 * Ashby
 * Company portals
+* RSS feeds
 
-Each should implement the existing source interface.
+## Deliverables
+
+* `src/sources/greenhouse.py` — GreenhouseSource
+* `src/sources/lever.py` — LeverSource
+* `src/sources/linkedin.py` — LinkedInSource
+* Config options for each source (enabled, board_slugs, company_slugs, keywords, location)
+* `run.py` iterates through all enabled sources
+* 12 new tests (17 total source tests)
+
+## Definition of Done
+
+* ✅ Greenhouse, Lever, LinkedIn sources implemented
+* ✅ Tests pass (17 source tests)
+* ✅ Lint passes
+* ✅ `run.py` supports multiple sources
 
 ---
 
@@ -436,6 +462,8 @@ The following features should **not** be implemented until after the MVP is comp
 * Multiple resumes
 * Cloud deployment
 * Distributed execution
+* Wellfound anti-detection (stealth plugins, proxy rotation)
+* Manual job URL input mode
 
 Architecture should support these features, but implementation must wait.
 
