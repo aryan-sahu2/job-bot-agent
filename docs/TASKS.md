@@ -16,11 +16,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 **Current Phase**
 
-> 🚧 MVP Development
-
-Current Objective:
-
-Submit applications only after explicit approval and log the result.
+> ✅ MVP Complete
 
 ---
 
@@ -311,7 +307,7 @@ No automatic submission.
 
 # Milestone 11 — Submission
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
@@ -324,6 +320,19 @@ Immediately log:
 * role
 * source
 * application status
+
+## Deliverables
+
+* `Submitter` class — orchestrates form filling and submission after approval
+* `SubmissionError` — raised when preconditions (approved status, apply URL) aren't met
+* Browser navigation, form filling, and click via existing `FormFiller` / `BrowserEngine`
+* Database update: status → `submitted`, `submitted_at` → now
+* Structured logging of submission event
+
+## Definition of Done
+
+* Tests pass
+* Lint passes
 
 ---
 
