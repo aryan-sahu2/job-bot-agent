@@ -109,7 +109,7 @@ A Wellfound plugin returns normalized jobs without browser-specific logic leakin
 
 # Milestone 3 — Storage
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
@@ -124,11 +124,24 @@ Store:
 
 SQLite is sufficient for the MVP.
 
+## Deliverables
+
+* SQLite-backed `Database` class
+* Job CRUD (save, get, list)
+* Application CRUD (save, get, list, update status)
+* JSON serialization for nested fields
+* Connection lifecycle management
+
+## Definition of Done
+
+* Tests pass (16 storage tests)
+* Lint passes
+
 ---
 
 # Milestone 4 — Resume & Profile
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
@@ -140,6 +153,18 @@ Initially support:
 * one profile
 
 Future support for multiple profiles is intentionally deferred.
+
+## Deliverables
+
+* `Profile` model (name, email, phone, title, skills, experience, education, urls, summary)
+* `Resume` model (raw text, extracted profile, file path)
+* `ResumeParser` — heuristic text-based resume extraction
+* `ProfileManager` — loads resume file and returns parsed profile
+
+## Definition of Done
+
+* Tests pass (17 profile tests, 45 total)
+* Lint passes
 
 ---
 
