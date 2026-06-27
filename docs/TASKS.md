@@ -170,7 +170,7 @@ Future support for multiple profiles is intentionally deferred.
 
 # Milestone 5 — Prompt System
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
