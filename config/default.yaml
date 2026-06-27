@@ -1,0 +1,23 @@
+app:
+  name: job-bot
+  data_dir: storage
+
+browser:
+  headless: true
+  timeout: 30000
+  viewport:
+    width: 1280
+    height: 800
+
+llm:
+  provider: ollama
+  model: gemma3
+  base_url: http://localhost:11434
+  timeout: 60
+
+storage:
+  database: storage/app.db
+
+logging:
+  level: INFO
+  file: storage/app.log

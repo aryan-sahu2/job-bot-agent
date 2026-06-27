@@ -26,7 +26,7 @@ Build one complete end-to-end workflow that discovers a job on Wellfound, genera
 
 # Milestone 0 — Project Foundation
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
