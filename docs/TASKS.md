@@ -188,7 +188,7 @@ Prompts should never be embedded directly inside Python files.
 
 # Milestone 6 — LLM Engine
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
