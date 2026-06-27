@@ -20,7 +20,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 Current Objective:
 
-Pause the workflow before submission so the user can review, edit, rewrite, or cancel generated answers and form fields.
+Submit applications only after explicit approval and log the result.
 
 ---
 
@@ -280,7 +280,7 @@ Submission is not allowed in this milestone.
 
 # Milestone 10 — Human Review
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
@@ -294,6 +294,18 @@ Allow the user to:
 * cancel
 
 No automatic submission.
+
+## Deliverables
+
+* `ReviewWorkflow` class — pauses pipeline for user review
+* `ReviewDecision` model — captures approve/cancel and final answers
+* CLI-based review workflow: approve, edit, rewrite (via LLM), cancel
+* Application status updated: `draft` → `approved`, or `cancelled`
+
+## Definition of Done
+
+* Tests pass (13 review tests, 104 total)
+* Lint passes
 
 ---
 
