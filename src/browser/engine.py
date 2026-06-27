@@ -1,8 +1,59 @@
+import asyncio
+import json
+import logging
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page, async_playwright
 
 from src.config.loader import BrowserConfig
+
+logger = logging.getLogger("job-bot.browser")
+
+STEALTH_SCRIPT = """
+// Remove webdriver flag
+Object.defineProperty(navigator, 'webdriver', {
+    get: () => false
+});
+
+// Add chrome runtime
+window.chrome = {
+    runtime: {},
+    loadTimes: function() {},
+    csi: function() {},
+    app: {}
+};
+
+// Add realistic plugins
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const plugins = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin' }
+        ];
+        plugins.length = 3;
+        return plugins;
+    }
+});
+
+// Add languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['en-US', 'en']
+});
+
+// Override permissions query
+const originalQuery = window.navigator.permissions.query;
+window.navigator.permissions.query = (parameters) => (
+    parameters.name === 'notifications' ?
+        Promise.resolve({ state: Notification.permission }) :
+        originalQuery(parameters)
+);
+
+// Remove automation indicators
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
+delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+"""
 
 
 class BrowserError(Exception):
@@ -15,27 +66,62 @@ class BrowserEngine:
         self._browser = None
         self._context: BrowserContext | None = None
         self._page: Page | None = None
+        self._playwright = None
+        self._user_data_dir = Path(config.user_data_dir)
 
     async def start(self) -> None:
         try:
-            p = await async_playwright().start()
-            self._browser = await p.chromium.launch(headless=self._config.headless)
-            self._context = await self._browser.new_context(
+            self._user_data_dir.mkdir(parents=True, exist_ok=True)
+
+            self._playwright = await async_playwright().start()
+
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-first-run",
+                "--no-default-browser-check",
+            ]
+
+            self._context = await self._playwright.chromium.launch_persistent_context(
+                user_data_dir=str(self._user_data_dir),
+                headless=self._config.headless,
+                args=launch_args,
                 viewport={
                     "width": self._config.viewport.width,
                     "height": self._config.viewport.height,
                 },
+                locale="en-US",
+                timezone_id="America/New_York",
             )
-            self._page = await self._context.new_page()
+
+            await self._context.add_init_script(STEALTH_SCRIPT)
+
+            if self._context.pages:
+                self._page = self._context.pages[0]
+            else:
+                self._page = await self._context.new_page()
+
         except Exception as e:
             raise BrowserError(f"Failed to launch browser: {e}") from e
 
     async def close(self) -> None:
-        if self._browser is not None:
-            await self._browser.close()
-            self._browser = None
+        if self._config.storage_state and self._context:
+            try:
+                state = await self._context.storage_state()
+                state_path = Path(self._config.storage_state)
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text(json.dumps(state, indent=2))
+                logger.info("Session state saved to %s", self._config.storage_state)
+            except Exception as e:
+                logger.warning("Failed to save session state: %s", e)
+
+        if self._context:
+            await self._context.close()
             self._context = None
             self._page = None
+
+        if self._playwright:
+            await self._playwright.stop()
+            self._playwright = None
 
     async def navigate(self, url: str) -> None:
         page = self._require_page()
@@ -121,7 +207,51 @@ class BrowserEngine:
         try:
             await page.screenshot(path=path, full_page=True)
         except Exception as e:
-            raise BrowserError(f"Failed to save screenshot to {path}: {e}") from e
+            raise BrowserError(f"Failed to save screenshot to {e}") from e
+
+    async def pause_for_login(
+        self, url: str, login_indicator: str, logged_in_indicator: str
+    ) -> bool:
+        page = self._require_page()
+        try:
+            await page.goto(url, timeout=self._config.timeout, wait_until="domcontentloaded")
+
+            try:
+                await page.wait_for_selector(logged_in_indicator, timeout=5000)
+                logger.info("Already logged in")
+                return True
+            except Exception:
+                pass
+
+            try:
+                await page.wait_for_selector(login_indicator, timeout=3000)
+            except Exception:
+                logger.info("No login required for %s", url)
+                return True
+
+            print(f"\n{'=' * 60}")
+            print("Manual login required")
+            print(f"{'=' * 60}")
+            print(f"A browser window has opened to: {url}")
+            print("Please log in manually in the browser.")
+            print("Once you are logged in, come back here and press Enter.")
+            print(f"{'=' * 60}\n")
+
+            await asyncio.get_event_loop().run_in_executor(
+                None, input, "Press Enter after logging in... "
+            )
+
+            try:
+                await page.wait_for_selector(logged_in_indicator, timeout=15000)
+                logger.info("Login successful")
+                return True
+            except Exception:
+                logger.warning("Could not verify login - proceeding anyway")
+                return True
+
+        except Exception as e:
+            logger.error("Login pause failed: %s", e)
+            return False
 
     async def __aenter__(self) -> "BrowserEngine":
         await self.start()

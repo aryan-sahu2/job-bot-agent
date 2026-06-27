@@ -13,6 +13,8 @@ class BrowserConfig(BaseModel):
     headless: bool = True
     timeout: int = 30000
     viewport: ViewportConfig = ViewportConfig()
+    user_data_dir: str = "storage/browser_profile"
+    storage_state: str | None = "storage/session.json"
 
 
 class LLMConfig(BaseModel):

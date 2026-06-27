@@ -6,3 +6,8 @@ venv/
 *.db
 .ruff_cache/
 .pytest_cache/
+
+# Browser automation
+storage/browser_profile/
+storage/session.json
+storage/screenshots/

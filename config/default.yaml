@@ -8,6 +8,8 @@ browser:
   viewport:
     width: 1280
     height: 800
+  user_data_dir: storage/browser_profile
+  storage_state: storage/session.json
 
 greenhouse:
   enabled: false

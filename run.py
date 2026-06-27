@@ -40,6 +40,17 @@ def _build_sources(browser: BrowserEngine, config: object) -> list[Source]:
     return sources
 
 
+async def _ensure_logins(browser: BrowserEngine, config: object) -> None:
+    if config.linkedin.enabled:
+        logged_in = await browser.pause_for_login(
+            url="https://www.linkedin.com/login",
+            login_indicator="input#session_key",
+            logged_in_indicator="div.feed-identity-module, input#global-nav-search",
+        )
+        if logged_in:
+            print("LinkedIn session ready.\n")
+
+
 async def run_interactive(config: object) -> None:
     db = Database(config.storage.database)
     db.initialize()
@@ -56,6 +67,8 @@ async def run_interactive(config: object) -> None:
     llm = LLMEngine(provider, prompt_loader)
 
     async with BrowserEngine(config.browser) as browser:
+        await _ensure_logins(browser, config)
+
         sources = _build_sources(browser, config)
         jobs = []
         for source in sources:
