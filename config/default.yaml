@@ -11,7 +11,7 @@ browser:
 
 llm:
   provider: ollama
-  model: gemma3
+  model: gemma3:4b
   base_url: http://localhost:11434
   timeout: 60
 
