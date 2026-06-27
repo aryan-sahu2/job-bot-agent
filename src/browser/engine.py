@@ -58,6 +58,20 @@ class BrowserEngine:
         except Exception as e:
             raise BrowserError(f"Failed to fill {selector}: {e}") from e
 
+    async def select_option(self, selector: str, value: str) -> None:
+        page = self._require_page()
+        try:
+            await page.select_option(selector, label=value)
+        except Exception as e:
+            raise BrowserError(f"Failed to select '{value}' in {selector}: {e}") from e
+
+    async def set_checked(self, selector: str, checked: bool = True) -> None:
+        page = self._require_page()
+        try:
+            await page.set_checked(selector, checked)
+        except Exception as e:
+            raise BrowserError(f"Failed to set checked={checked} for {selector}: {e}") from e
+
     async def upload_file(self, selector: str, file_path: str) -> None:
         page = self._require_page()
         path = Path(file_path)

@@ -20,7 +20,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 Current Objective:
 
-Build one complete end-to-end workflow that discovers a job on Wellfound, generates personalized application answers, pauses for human review, submits after approval, and logs the application.
+Pause the workflow before submission so the user can review, edit, rewrite, or cancel generated answers and form fields.
 
 ---
 
@@ -261,7 +261,7 @@ Outputs should be editable before submission.
 
 # Milestone 9 — Form Filling
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
