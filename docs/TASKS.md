@@ -87,7 +87,7 @@ A simple script can launch Playwright and reliably automate a test page.
 
 # Milestone 2 — Source Framework
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 

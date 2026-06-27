@@ -88,6 +88,20 @@ class BrowserEngine:
         except Exception as e:
             raise BrowserError(f"Failed waiting for {selector}: {e}") from e
 
+    async def evaluate(self, expression: str) -> object:
+        page = self._require_page()
+        try:
+            return await page.evaluate(expression)
+        except Exception as e:
+            raise BrowserError(f"Failed to evaluate JS: {e}") from e
+
+    async def get_content(self) -> str:
+        page = self._require_page()
+        try:
+            return await page.content()
+        except Exception as e:
+            raise BrowserError(f"Failed to get page content: {e}") from e
+
     async def screenshot(self, path: str) -> None:
         page = self._require_page()
         try:
