@@ -18,9 +18,14 @@ lever:
   company_slugs: []
 
 linkedin:
-  enabled: false
-  keywords: []
-  location: null
+  enabled: true
+  keywords:
+    - full stack engineer
+    - software engineer
+    - python developer
+    - react developer
+    - backend engineer
+  location: Pune
 
 llm:
   provider: ollama

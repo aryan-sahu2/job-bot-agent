@@ -47,6 +47,12 @@ class LinkedInConfig(BaseModel):
     location: str | None = None
 
 
+class SchedulerConfig(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = 60
+    max_jobs_per_run: int = 50
+
+
 class AppConfig(BaseModel):
     name: str = "job-bot"
     data_dir: str = "storage"
@@ -59,6 +65,7 @@ class Config(BaseModel):
     lever: LeverConfig = LeverConfig()
     linkedin: LinkedInConfig = LinkedInConfig()
     llm: LLMConfig = LLMConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
 

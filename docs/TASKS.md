@@ -16,7 +16,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 **Current Phase**
 
-> ✅ Milestone 13 — Additional Sources Complete
+> ✅ Milestone 12 — Scheduler Complete
 
 ---
 
@@ -338,15 +338,31 @@ Immediately log:
 
 # Milestone 12 — Scheduler
 
-Status: 🔒 Locked
+Status: ✅ Complete
 
-This milestone is intentionally postponed until the MVP is complete.
+## Goals
 
-Future responsibilities:
+Run periodic job discovery scans.
 
-* periodic scans
-* job discovery
-* recurring tasks
+## Responsibilities
+
+* Periodic scans
+* Job discovery
+* Recurring tasks
+* Deduplication
+* Graceful shutdown
+
+## Deliverables
+
+* `src/scheduler/scheduler.py` — `Scheduler` class with `run_once()` and `run_forever()`
+* `SchedulerConfig` — interval_minutes, max_jobs_per_run, enabled
+* `run.py --scheduler` flag for periodic mode
+* Signal handling (SIGINT, SIGTERM) for graceful shutdown
+
+## Definition of Done
+
+* ✅ Tests pass (9 scheduler tests, 151 total)
+* ✅ Lint passes
 
 ---
 

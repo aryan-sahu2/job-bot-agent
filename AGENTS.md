@@ -302,3 +302,67 @@ A feature is complete only when:
 Prefer shipping one complete feature over five partially built ones.
 
 Incremental progress beats unfinished architecture.
+
+---
+
+# Quick Reference
+
+## Setup
+
+```bash
+# Install dependencies
+uv sync --all-extras
+
+# If after uv sync, python/python3 fail with ModuleNotFoundError, re-activate:
+source .venv/bin/activate
+
+# On macOS, use `python3` if `python` is not found in venv
+```
+
+## Commands
+
+```bash
+# Run all tests (~2 min, 151 tests)
+uv run pytest tests/ --tb=short
+
+# Run specific test file (fast, ~10-20s)
+uv run pytest tests/test_scheduler.py -x -v
+
+# Run lint
+uv run ruff check src/ tests/
+
+# Run formatter
+uv run ruff format src/ tests/
+
+# Run the app
+uv run python run.py              # interactive mode
+uv run python run.py --scheduler  # periodic scheduler mode
+```
+
+**Note:** Always prefer `uv run python` over bare `python` or `python3` to ensure the correct venv is used. After `uv sync` recreates `.venv`, you must re-activate it (`source .venv/bin/activate`) or use `uv run`.
+
+**Scheduler requirements:** The scheduler needs Ollama running locally (`ollama serve`) and Playwright browsers installed (`playwright install`) for real job discovery. Tests use mocks and require neither.
+
+## Project State
+
+Milestones 0–13 are complete. The project has a full pipeline from job discovery through submission.
+
+Completed modules:
+- `src/models/` — Job, Application, Evaluation, FormField
+- `src/config/` — YAML config loader with Pydantic models
+- `src/storage/` — SQLite Database with Job/Application CRUD
+- `src/browser/` — Playwright-based BrowserEngine
+- `src/sources/` — Wellfound, Greenhouse, Lever, LinkedIn (all implement Source ABC)
+- `src/profile/` — ResumeParser, ProfileManager
+- `src/llm/` — LLMEngine, OllamaProvider
+- `src/prompts/` — PromptLoader (reads from `/prompts`)
+- `src/evaluator/` — JobEvaluator (LLM-based scoring)
+- `src/workflow/` — AnswerGenerator, FormFiller, ReviewWorkflow, Submitter
+- `src/scheduler/` — Scheduler (periodic job discovery)
+
+## Key Conventions
+
+- All source classes extend `Source` ABC and return `list[Job]`
+- Config lives in `config/default.yaml`, loaded via `ConfigLoader`
+- Tests use mock objects for browser/LLM (no real network calls)
+- Async throughout — use `pytest-asyncio` for async tests
