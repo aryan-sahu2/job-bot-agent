@@ -4,11 +4,15 @@ import yaml
 from pydantic import BaseModel
 
 
+class ViewportConfig(BaseModel):
+    width: int = 1280
+    height: int = 800
+
+
 class BrowserConfig(BaseModel):
     headless: bool = True
     timeout: int = 30000
-    viewport_width: int = 1280
-    viewport_height: int = 800
+    viewport: ViewportConfig = ViewportConfig()
 
 
 class LLMConfig(BaseModel):

@@ -55,7 +55,7 @@ Status: ✅ Complete
 
 # Milestone 1 — Browser Engine
 
-Status: ⏳ Pending
+Status: ✅ Complete
 
 ## Goals
 
