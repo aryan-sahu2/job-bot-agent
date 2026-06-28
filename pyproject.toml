@@ -8,6 +8,11 @@ dependencies = [
     "pydantic>=2.0",
     "pyyaml>=6.0",
     "httpx>=0.28",
+    "pyobjc-core>=10.0",
+    "pyobjc-framework-ApplicationServices>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+    "pynput>=1.7",
+    "pyobjc-framework-vision>=10.0",
 ]
 
 [project.optional-dependencies]

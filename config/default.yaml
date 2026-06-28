@@ -24,9 +24,9 @@ linkedin:
   keywords:
     - full stack engineer
     - software engineer
-    - python developer
+    # - python developer
     - react developer
-    - backend engineer
+    # - backend engineer
   location: Pune
 
 llm:
@@ -37,6 +37,14 @@ llm:
 
 storage:
   database: storage/app.db
+
+screen:
+  enabled: true
+  hotkey: "cmd+j"
+  auto_scroll: true
+  max_scroll_attempts: 5
+  scroll_pause: 0.5
+  ask_before_submit: true
 
 logging:
   level: INFO

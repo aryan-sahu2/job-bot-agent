@@ -55,6 +55,15 @@ class SchedulerConfig(BaseModel):
     max_jobs_per_run: int = 50
 
 
+class ScreenConfig(BaseModel):
+    enabled: bool = True
+    hotkey: str = "cmd+j"
+    auto_scroll: bool = True
+    max_scroll_attempts: int = 5
+    scroll_pause: float = 0.5
+    ask_before_submit: bool = True
+
+
 class AppConfig(BaseModel):
     name: str = "job-bot"
     data_dir: str = "storage"
@@ -68,6 +77,7 @@ class Config(BaseModel):
     linkedin: LinkedInConfig = LinkedInConfig()
     llm: LLMConfig = LLMConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
+    screen: ScreenConfig = ScreenConfig()
     storage: StorageConfig = StorageConfig()
     logging: LoggingConfig = LoggingConfig()
 

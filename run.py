@@ -1,7 +1,6 @@
 import argparse
 import asyncio
 import logging
-import sys
 
 from src.browser.engine import BrowserEngine
 from src.config.loader import ConfigLoader
@@ -17,6 +16,9 @@ from src.sources.linkedin import LinkedInSource
 from src.sources.wellfound import WellfoundSource
 from src.storage.database import Database
 from src.workflow.answer import AnswerGenerator
+
+logging.basicConfig(level=logging.WARNING)
+logger = logging.getLogger("job-bot")
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger("job-bot")
@@ -153,6 +155,70 @@ async def run_interactive(config: object) -> None:
     db.close()
 
 
+async def run_screen(config: object) -> None:
+    """Run in screen-aware mode with global hotkey activation."""
+    from src.screen.hotkey import GlobalHotkeyListener
+    from src.screen.workflow import ScreenWorkflow
+
+    db = Database(config.storage.database)
+    db.initialize()
+
+    profile_mgr = ProfileManager()
+    profile = profile_mgr.load_profile_from_resume("resume.txt")
+
+    provider = OllamaProvider(
+        model=config.llm.model,
+        base_url=config.llm.base_url,
+        timeout=config.llm.timeout,
+    )
+    prompt_loader = PromptLoader()
+    llm = LLMEngine(provider, prompt_loader)
+    generator = AnswerGenerator(llm, profile_mgr)
+
+    workflow = ScreenWorkflow(config)
+    workflow.initialize(
+        profile_manager=profile_mgr,
+        profile=profile,
+        llm_engine=llm,
+        answer_generator=generator,
+        database=db,
+    )
+
+    async def on_hotkey() -> None:
+        """Called when the hotkey is pressed."""
+        print("\nHotkey detected! Scanning screen...")
+        success = await workflow.run_once()
+        if success:
+            print("Application processed successfully!")
+        else:
+            print("Could not process application. Check logs for details.")
+
+    hotkey_combo = getattr(config.screen, "hotkey", "cmd+j")
+    listener = GlobalHotkeyListener(
+        callback=on_hotkey, hotkey_combo=hotkey_combo, loop=asyncio.get_event_loop()
+    )
+
+    print("=" * 60)
+    print("SCREEN-AWARE JOB APPLICATION ASSISTANT")
+    print("=" * 60)
+    print(f"\nHotkey: {hotkey_combo}")
+    print("\nInstructions:")
+    print("  1. Open a job posting in your browser")
+    print("  2. Press the hotkey to scan and process")
+    print("  3. Follow prompts for submission")
+    print("\nPress Ctrl+C to exit.\n")
+
+    listener.start()
+
+    try:
+        while True:
+            await asyncio.sleep(1)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+        listener.stop()
+        db.close()
+
+
 async def run_scheduler(config: object) -> None:
     from src.scheduler.scheduler import Scheduler
 
@@ -202,6 +268,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Run in periodic scheduler mode instead of interactive mode",
     )
+    parser.add_argument(
+        "--screen",
+        action="store_true",
+        help="Run in screen-aware mode with global hotkey activation",
+    )
     return parser.parse_args()
 
 
@@ -209,7 +280,9 @@ def main() -> None:
     args = parse_args()
     config = ConfigLoader().load()
 
-    if args.scheduler:
+    if args.screen:
+        asyncio.run(run_screen(config))
+    elif args.scheduler:
         asyncio.run(run_scheduler(config))
     else:
         asyncio.run(run_interactive(config))

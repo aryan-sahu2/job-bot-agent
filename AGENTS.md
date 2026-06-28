@@ -89,6 +89,14 @@ Browser
 - Upload
 - Screenshot
 
+Screen
+- Listen for global hotkey
+- Read screen via accessibility APIs
+- Parse job descriptions
+- Detect form fields
+- Fill forms via accessibility
+- Click buttons
+
 Sources
 - Discover jobs
 - Normalize jobs
@@ -278,8 +286,9 @@ Build in this order.
 14. Review workflow
 15. Submission
 16. Scheduler
-17. Memory
-18. Additional sources
+17. Screen-aware assistant
+18. Memory
+19. Additional sources
 
 Do not skip ahead.
 
@@ -337,9 +346,12 @@ uv run ruff format src/ tests/
 # Run the app
 uv run python run.py              # interactive mode
 uv run python run.py --scheduler  # periodic scheduler mode
+uv run python run.py --screen     # screen-aware mode (Cmd+J hotkey)
 ```
 
 **Note:** Always prefer `uv run python` over bare `python` or `python3` to ensure the correct venv is used. After `uv sync` recreates `.venv`, you must re-activate it (`source .venv/bin/activate`) or use `uv run`.
+
+**Screen mode requirements:** The screen mode needs macOS Accessibility permissions granted to your terminal. Run `uv run python run.py --screen` and press Cmd+J when viewing a job posting. No browser automation or Ollama needed for basic form filling (AI generation requires Ollama).
 
 **Scheduler requirements:** The scheduler needs Ollama running locally (`ollama serve`) and Playwright browsers installed (`playwright install`) for real job discovery. Tests use mocks and require neither.
 
@@ -359,6 +371,7 @@ Completed modules:
 - `src/evaluator/` — JobEvaluator (LLM-based scoring)
 - `src/workflow/` — AnswerGenerator, FormFiller, ReviewWorkflow, Submitter
 - `src/scheduler/` — Scheduler (periodic job discovery)
+- `src/screen/` — Screen-aware assistant (macOS Accessibility APIs, global hotkey, form detection/filling)
 
 ## Key Conventions
 

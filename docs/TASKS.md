@@ -16,7 +16,7 @@ Future milestones exist to guide architecture, **not** current implementation.
 
 **Current Phase**
 
-> ✅ Milestone 12 — Scheduler Complete
+> ✅ Milestone 13A — Screen-Aware Assistant Complete
 
 ---
 
@@ -407,6 +407,64 @@ Each source must implement the existing `Source` interface and return normalized
 * ✅ Tests pass (17 source tests)
 * ✅ Lint passes
 * ✅ `run.py` supports multiple sources
+
+---
+
+# Milestone 13A — Screen-Aware Assistant
+
+Status: ✅ Complete
+
+## Goals
+
+Create a keyboard-activated, screen-aware job application assistant that uses macOS Accessibility APIs to read and interact with the user's current browser window.
+
+## Features
+
+* Global hotkey activation (Cmd+J)
+* macOS Accessibility API-based screen reading
+* Job description parsing from screen content
+* Apply button detection and clicking
+* Form field detection via accessibility tree
+* Accessibility-based form filling
+* AI-powered answer generation for detected fields
+* User prompt for review vs auto-submit
+
+## Architecture
+
+New module: `src/screen/`
+
+* `hotkey.py` — GlobalHotkeyListener (pynput-based)
+* `reader.py` — ScreenReader (macOS Accessibility APIs)
+* `parser.py` — JobDescriptionParser
+* `button_finder.py` — ApplyButtonFinder
+* `form_detector.py` — FormDetector
+* `form_filler.py` — FormFiller (accessibility-based)
+* `workflow.py` — ScreenWorkflow orchestrator
+* `models.py` — Screen-specific data models
+
+## Configuration
+
+```yaml
+screen:
+  enabled: true
+  hotkey: "cmd+j"
+  auto_scroll: true
+  max_scroll_attempts: 5
+  scroll_pause: 0.5
+  ask_before_submit: true
+```
+
+## Usage
+
+```bash
+uv run python run.py --screen
+```
+
+## Definition of Done
+
+* ✅ Tests pass (52 screen module tests)
+* ✅ Lint passes
+* ✅ Documentation updated
 
 ---
 
