@@ -137,6 +137,23 @@ class JobDescriptionParser:
                 text = str(value).strip()
                 if self._looks_like_company_name(text):
                     return text
+
+        title = self._reader.get_attribute(window_element, "AXTitle")
+        if title:
+            parsed = self._extract_company_from_title(str(title))
+            if parsed:
+                return parsed
+        return ""
+
+    def _extract_company_from_title(self, title: str) -> str:
+        """Extract company name from browser tab title."""
+        company_keywords = [" - "]
+        for sep in company_keywords:
+            parts = title.split(sep)
+            if len(parts) >= 2:
+                candidate = parts[1].split("|")[0].strip()
+                if self._looks_like_company_name(candidate):
+                    return candidate
         return ""
 
     def _extract_location(self, window_element: Any) -> str:
@@ -247,7 +264,10 @@ class JobDescriptionParser:
             return False
         if text[0].isdigit():
             return False
-        skip_words = ["apply", "save", "share", "sign", "log", "back", "home"]
+        skip_words = [
+            "apply", "save", "share", "sign", "log", "back", "home",
+            "brave", "chrome", "safari", "firefox", "edge", "opera",
+        ]
         if text.lower() in skip_words:
             return False
         return True

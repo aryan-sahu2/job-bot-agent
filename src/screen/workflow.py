@@ -12,7 +12,7 @@ from src.profile.manager import ProfileManager
 from src.screen.button_finder import ApplyButtonFinder
 from src.screen.form_detector import FormDetector
 from src.screen.form_filler import FormFiller
-from src.screen.models import ScreenJob, WorkflowState
+from src.screen.models import DetectedField, FieldType, ScreenJob, WorkflowState
 from src.screen.parser import JobDescriptionParser
 from src.screen.reader import ScreenReader
 from src.storage.database import Database
@@ -90,8 +90,14 @@ class ScreenWorkflow:
     async def run_once(self) -> bool:
         """Run the workflow once on the current screen.
 
-        Returns:
-            True if the workflow completed successfully, False otherwise.
+        Flow:
+        1. Scan screen for job description
+        2. Detect form fields (early — form may already be visible)
+        3. If fields found → generate per-field answers, skip apply click
+        4. If no fields → generate generic answers, click apply, re-detect fields
+        5. Fill fields
+        6. Prompt user for decision
+        7. Submit or review
         """
         try:
             self._state = WorkflowState.SCANNING
@@ -104,43 +110,67 @@ class ScreenWorkflow:
                 self._state = WorkflowState.ERROR
                 return False
 
-            self._state = WorkflowState.READING_JOB
-            logger.info(
-                "Detected job: '%s' at '%s'",
-                self._current_job.title,
-                self._current_job.company,
-            )
-
-            self._state = WorkflowState.GENERATING_ANSWERS
-            answers = await self._generate_answers()
+            self._state = WorkflowState.DETECTING_FIELDS
+            fields = self._form_detector.detect_fields()
+            fields_count = len(fields)
+            logger.info("Detected %d form field(s)", fields_count)
 
             self._state = WorkflowState.CLICKING_APPLY
-            if not self._click_apply_button():
-                logger.warning("No apply button found - user may need to click manually")
+            apply_clicked = False
+            if fields_count > 0:
+                logger.info("Form already visible, skipping apply click")
+                apply_clicked = True
+            else:
+                apply_clicked = self._click_apply_button()
+                if apply_clicked:
+                    time.sleep(1.5)
+                    fields = self._form_detector.detect_fields()
+                    fields_count = len(fields)
+                    logger.info("After apply: detected %d field(s)", fields_count)
+                else:
+                    logger.warning("No apply button found - user may need to click manually")
 
-            self._state = WorkflowState.DETECTING_FIELDS
-            time.sleep(1)
-            fields = self._form_detector.detect_fields()
-            logger.info("Detected %d form fields", len(fields))
+            self._state = WorkflowState.GENERATING_ANSWERS
+            answers = await self._generate_answers(fields=fields)
 
             self._state = WorkflowState.FILLING_FIELDS
+            success = 0
+            fail = 0
             if fields and answers:
                 success, fail = self._form_filler.fill_all_fields(fields, answers)
                 logger.info("Filled %d fields, %d failed", success, fail)
 
             self._state = WorkflowState.AWAITING_DECISION
-            should_submit = await self._prompt_user_decision()
+            should_submit = await self._prompt_user_decision(
+                apply_clicked=apply_clicked,
+                fields_count=fields_count,
+                fields_filled=success,
+                fields_failed=fail,
+            )
 
             if should_submit:
                 self._state = WorkflowState.SUBMITTING
-                self._click_submit_button()
-                await self._save_application("submitted")
+                clicked = self._click_submit_button()
+                if clicked:
+                    await self._save_application("submitted")
+                    logger.info("Application submitted successfully")
+                else:
+                    logger.warning(
+                        "Could not find submit button. The form has been filled "
+                        "but may need manual submission."
+                    )
+                    print(
+                        "\nWarning: Could not find the submit button automatically.\n"
+                        "The form fields have been filled. Please click Submit manually."
+                    )
+                    await self._save_application("reviewing")
             else:
                 await self._save_application("reviewing")
 
             self._state = WorkflowState.COMPLETE
+            current_state = self._state
             self._purge_context()
-            return True
+            return current_state == WorkflowState.COMPLETE
 
         except Exception:
             logger.exception("Error in screen workflow")
@@ -153,9 +183,22 @@ class ScreenWorkflow:
         logger.info("Scanning current screen for job information")
         self._current_job = self._parser.parse()
 
-    async def _generate_answers(self) -> dict[str, str]:
-        """Generate personalized answers for the detected job."""
-        if not self._current_job or not self._answer_generator or not self._profile:
+    async def _generate_answers(
+        self, fields: list[DetectedField] | None = None
+    ) -> dict[str, str]:
+        """Generate personalized answers for the detected job and form fields.
+
+        Detects whether the page has custom screener questions (e.g. Indeed)
+        and generates per-field answers, or falls back to a generic cover letter
+        for traditional application forms.
+
+        Args:
+            fields: Detected form fields. If empty, generates a generic cover letter.
+
+        Returns:
+            Dict mapping field identifiers/labels to generated values.
+        """
+        if not self._current_job or not self._profile:
             return {}
 
         from src.models.job import Job
@@ -170,44 +213,77 @@ class ScreenWorkflow:
         )
 
         profile = self._profile
+        answers: dict[str, str] = {}
+
+        # Always include profile identity fields
+        if profile:
+            if profile.name:
+                parts = profile.name.split()
+                answers["first_name"] = parts[0]
+                answers["last_name"] = parts[-1] if len(parts) > 1 else ""
+            answers["email"] = profile.email or ""
+            answers["phone"] = profile.phone or ""
+            answers["company"] = self._current_job.company or ""
+            answers["position"] = self._current_job.title or ""
+
+        # Check if there are custom textarea/text fields (screener questions)
+        custom_fields = [
+            f for f in (fields or [])
+            if f.field_type in (FieldType.TEXTAREA, FieldType.TEXT)
+            and f.title.strip()
+        ]
+
+        if custom_fields:
+            logger.info("Generating per-field answers for %d custom field(s)", len(custom_fields))
+            try:
+                per_field = await self._answer_generator.generate_for_fields(
+                    job=job, fields=custom_fields, profile=profile,
+                )
+                if per_field:
+                    answers.update(per_field)
+                    logger.info(
+                        "Generated %d field-specific answers", len(per_field)
+                    )
+            except Exception:
+                logger.exception("Error generating per-field answers")
 
         try:
             answer_text = await self._answer_generator.generate(
-                job=job,
-                profile=profile,
+                job=job, profile=profile,
             )
-
-            answers = {
-                "cover_letter": answer_text,
-                "why_company": answer_text,
-            }
-
-            if self._current_job.company:
-                answers["company"] = self._current_job.company
-            if self._current_job.title:
-                answers["position"] = self._current_job.title
-
-            if profile:
-                answers["first_name"] = profile.name.split()[0] if profile.name else ""
-                answers["last_name"] = profile.name.split()[-1] if profile.name else ""
-                answers["email"] = profile.email or ""
-                answers["phone"] = profile.phone or ""
-
-            return answers
+            answers["cover_letter"] = answer_text
+            answers["why_company"] = answer_text
         except Exception:
-            logger.exception("Error generating answers")
-            return {}
+            logger.exception("Error generating cover letter")
+
+        return answers
 
     def _click_apply_button(self) -> bool:
         """Find and click the apply button."""
         return self._button_finder.find_and_click_apply()
 
     def _click_submit_button(self) -> bool:
-        """Click the submit button after filling fields."""
-        return self._button_finder.find_and_click_apply()
+        """Click the submit button after filling fields.
 
-    async def _prompt_user_decision(self) -> bool:
+        Uses find_and_click_submit which searches with SUBMIT_KEYWORDS
+        (submit, send, next, continue, etc.) and falls back to OCR.
+        """
+        return self._button_finder.find_and_click_submit()
+
+    async def _prompt_user_decision(
+        self,
+        apply_clicked: bool = False,
+        fields_count: int = 0,
+        fields_filled: int = 0,
+        fields_failed: int = 0,
+    ) -> bool:
         """Prompt the user to decide whether to submit or review.
+
+        Args:
+            apply_clicked: Whether the apply button was successfully clicked.
+            fields_count: Total number of form fields detected.
+            fields_filled: Number of fields filled successfully.
+            fields_failed: Number of fields that failed to fill.
 
         Returns:
             True if user wants to auto-submit, False for manual review.
@@ -216,7 +292,7 @@ class ScreenWorkflow:
             return True
 
         print("\n" + "=" * 60)
-        print("APPLICATION READY FOR SUBMISSION")
+        print("APPLICATION STATUS")
         print("=" * 60)
 
         if self._current_job:
@@ -224,7 +300,24 @@ class ScreenWorkflow:
             print(f"Company: {self._current_job.company}")
             print(f"Location: {self._current_job.location}")
 
-        print("\nThe form has been filled with your profile data.")
+        print(f"\nApply button clicked: {'Yes' if apply_clicked else 'No'}")
+        print(f"Form fields detected: {fields_count}")
+        print(f"Fields filled: {fields_filled}")
+        if fields_failed:
+            print(f"Fields failed: {fields_failed}")
+
+        if apply_clicked and fields_filled > 0:
+            print("\nThe form has been filled with your profile data.")
+        elif not apply_clicked and fields_count == 0:
+            print(
+                "\nNo apply button was found and no form fields were detected.\n"
+                "You may need to click the apply/continue button manually in your browser."
+            )
+        else:
+            print(
+                "\nThe form fields have been partially processed."
+            )
+
         print("\nOptions:")
         print("  [S] Submit automatically")
         print("  [R] Review manually (you click Submit)")
@@ -236,8 +329,8 @@ class ScreenWorkflow:
             if choice in ("s", "submit"):
                 return True
             elif choice in ("r", "review", "manual"):
-                print("\nForm is filled. Please review and click Submit manually.")
-                input("Press Enter after you've submitted...")
+                print("\nPlease review the form in your browser and click Submit manually.")
+                input("Press Enter after you've submitted or to continue...")
                 return False
             elif choice in ("c", "cancel"):
                 return False
