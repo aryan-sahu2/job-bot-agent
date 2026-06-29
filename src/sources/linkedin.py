@@ -1,97 +1,151 @@
 import asyncio
-from urllib.parse import quote
+import json
+from urllib.parse import quote_plus
 
-from playwright.async_api import Page
+import httpx
+from bs4 import BeautifulSoup
 
 from src.config import SearchConfig
 from src.models import JobListing
 
 
 class LinkedInSource:
+    BASE_SEARCH = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
+
     @staticmethod
-    def build_url(config: SearchConfig) -> str:
-        base = "https://www.linkedin.com/jobs/search"
+    def build_search_url(config: SearchConfig, start: int = 0) -> str:
         params = {
-            "keywords": config.keywords,
-            "location": config.location,
-            "distance": config.linkedin_distance,
-            "f_TPR": config.linkedin_time_filter,
+            "keywords": quote_plus(config.keywords),
+            "location": quote_plus(config.location),
+            "start": start,
         }
+        if config.linkedin_time_filter:
+            params["f_TPR"] = config.linkedin_time_filter
         if config.remote_only:
-            params["f_WT"] = config.linkedin_remote_filter
-
-        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items() if v)
-        return f"{base}?{query}"
+            params["f_WT"] = "2"
+        level_map = {"entry": "2", "mid": "4", "senior": "5", "staff": "6"}
+        if config.experience_level in level_map:
+            params["f_E"] = level_map[config.experience_level]
+        return f"{LinkedInSource.BASE_SEARCH}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
 
     @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
-        url = LinkedInSource.build_url(config)
-        print(f"  LinkedIn: {url[:90]}...")
+    async def _fetch_job_detail(client: httpx.AsyncClient, url: str) -> tuple[str, str | None]:
+        try:
+            resp = await client.get(url, follow_redirects=True, timeout=15)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
 
-        await page.goto(url, wait_until="networkidle", timeout=45000)
-        await asyncio.sleep(4)
-
-        jobs = []
-        cards = await page.query_selector_all(".base-card")
-        print(f"    Found {len(cards)} cards")
-
-        for i, card in enumerate(cards[:config.max_jobs_per_source]):
-            try:
-                title_el = await card.query_selector(".base-search-card__title")
-                company_el = await card.query_selector(".base-search-card__subtitle")
-                loc_el = await card.query_selector(".job-search-card__location")
-                link_el = await card.query_selector("a.base-card__full-link")
-                date_el = await card.query_selector("time")
-
-                title = await title_el.inner_text() if title_el else ""
-                company = await company_el.inner_text() if company_el else ""
-                location = await loc_el.inner_text() if loc_el else ""
-                href = await link_el.get_attribute("href") if link_el else ""
-                posted = await date_el.get_attribute("datetime") if date_el else ""
-
-                if not title or not href:
-                    continue
-
-                clean_url = href.split("?")[0]
-
-                description = ""
-                salary = None
+            script = soup.find("script", type="application/ld+json")
+            if script:
                 try:
-                    new_page = await page.context.new_page()
-                    await new_page.goto(clean_url, wait_until="domcontentloaded", timeout=15000)
-                    await asyncio.sleep(2)
+                    ld = json.loads(script.string)
+                    desc = ld.get("description", "")
+                    salary = None
+                    est = ld.get("estimatedSalary")
+                    if isinstance(est, dict):
+                        salary = est.get("name")
+                    elif isinstance(est, list) and len(est) > 0:
+                        salary = est[0].get("name")
+                    return desc, salary
+                except Exception:
+                    pass
 
-                    desc_el = await new_page.query_selector(
-                        ".description__text, .show-more-less-html__markup, [class*='description']"
-                    )
-                    if desc_el:
-                        description = await desc_el.inner_text()
+            desc_el = soup.select_one(
+                ".description__text, .show-more-less-html__markup, div[class*='description']"
+            )
+            desc = desc_el.get_text(separator="\n", strip=True) if desc_el else ""
+            return desc, None
+        except Exception:
+            return "", None
 
-                    salary_el = await new_page.query_selector(
-                        ".compensation__salary, [class*='salary'], [class*='compensation']"
-                    )
-                    salary = await salary_el.inner_text() if salary_el else None
+    @staticmethod
+    async def scrape(config: SearchConfig) -> list[JobListing]:
+        jobs: list[JobListing] = []
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+        }
 
-                    await new_page.close()
+        async with httpx.AsyncClient(
+            headers=headers, timeout=30, http2=True, follow_redirects=True
+        ) as client:
+            for start in range(0, config.max_jobs_per_source * 2, 25):
+                url = LinkedInSource.build_search_url(config, start)
+                print(f"  LinkedIn: {url[:90]}...")
+
+                try:
+                    resp = await client.get(url)
+                    if resp.status_code != 200:
+                        print(f"    LinkedIn returned {resp.status_code}, stopping.")
+                        break
+
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    cards = soup.find_all("li")
+                    if not cards:
+                        print("    No cards found, stopping.")
+                        break
+
+                    print(f"    Found {len(cards)} cards")
+
+                    card_data = []
+                    hrefs = []
+                    for card in cards:
+                        title_el = card.select_one("h3.base-search-card__title")
+                        company_el = card.select_one("h4.base-search-card__subtitle")
+                        loc_el = card.select_one("span.job-search-card__location")
+                        link_el = card.select_one("a.base-card__full-link")
+                        date_el = card.select_one("time")
+
+                        if not title_el or not link_el:
+                            continue
+
+                        title = title_el.get_text(strip=True)
+                        company = company_el.get_text(strip=True) if company_el else ""
+                        location = loc_el.get_text(strip=True) if loc_el else ""
+                        href = link_el.get("href", "").split("?")[0]
+                        posted = date_el.get("datetime") if date_el else ""
+
+                        card_data.append((title, company, location, href, posted))
+                        hrefs.append(href)
+
+                    sem = asyncio.Semaphore(5)
+                    async def limited_fetch(href: str):
+                        async with sem:
+                            await asyncio.sleep(0.3)
+                            return await LinkedInSource._fetch_job_detail(client, href)
+
+                    details = await asyncio.gather(*[limited_fetch(h) for h in hrefs])
+
+                    for (title, company, location, href, posted), (desc, salary) in zip(
+                        card_data, details
+                    ):
+                        jobs.append(
+                            JobListing(
+                                title=title,
+                                company=company,
+                                location=location,
+                                url=href,
+                                source="linkedin",
+                                posted_date=posted,
+                                description=desc,
+                                salary=str(salary) if salary else None,
+                            )
+                        )
+
+                    if len(cards) < 25:
+                        break
+
                 except Exception as e:
-                    print(f"    Skip desc fetch for {title[:30]}: {e}")
+                    print(f"    LinkedIn error: {e}")
+                    break
 
-                jobs.append(JobListing(
-                    title=title.strip(),
-                    company=company.strip(),
-                    location=location.strip(),
-                    url=clean_url,
-                    salary=salary,
-                    description=description.strip(),
-                    source="linkedin",
-                    posted_date=posted,
-                ))
-
-                await asyncio.sleep(1.5)
-
-            except Exception as e:
-                print(f"    Card parse error: {e}")
-                continue
-
-        print(f"    {len(jobs)} LinkedIn jobs with descriptions")
+        print(f"    {len(jobs)} LinkedIn jobs")
         return jobs

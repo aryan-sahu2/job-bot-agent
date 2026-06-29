@@ -1,8 +1,7 @@
+import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
-
-from playwright.async_api import async_playwright
 
 from src.config import SearchConfig
 from src.llm import evaluate_job
@@ -12,7 +11,9 @@ from src.sources.indeed import IndeedSource
 from src.sources.lever import LeverSource
 from src.sources.linkedin import LinkedInSource
 from src.sources.naukri import NaukriSource
+from src.sources.remoteok import RemoteOKSource
 from src.sources.wellfound import WellfoundSource
+from src.sources.weworkremotely import WeWorkRemotelySource
 
 STEALTH_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -20,20 +21,6 @@ Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
 Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
 window.chrome = { runtime: {} };
 """
-
-async def new_stealth_context(browser):
-    context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        viewport={"width": 1440, "height": 900},
-        locale="en-US",
-        timezone_id="America/New_York",
-    )
-    await context.add_init_script(STEALTH_SCRIPT)
-    return context
 
 
 async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
@@ -46,56 +33,28 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     print(f"Exclude: {', '.join(config.exclude_keywords)}")
     print("=" * 60)
 
-    all_jobs = []
+    tasks = [
+        LinkedInSource.scrape(config),
+        IndeedSource.scrape(config),
+        NaukriSource.scrape(config),
+        WellfoundSource.scrape(config),
+        RemoteOKSource.scrape(config),
+        WeWorkRemotelySource.scrape(config),
+    ]
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+    for board in config.greenhouse_boards:
+        tasks.append(GreenhouseSource.scrape(board, config))
 
-        # LinkedIn
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await LinkedInSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
+    for slug in config.lever_slugs:
+        tasks.append(LeverSource.scrape(slug, config))
 
-        # Naukri
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await NaukriSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        # Indeed
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await IndeedSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        # Greenhouse
-        for board in config.greenhouse_boards:
-            context = await new_stealth_context(browser)
-            page = await context.new_page()
-            jobs = await GreenhouseSource.scrape(board, page)
-            all_jobs.extend(jobs)
-            await context.close()
-
-        # Lever
-        for slug in config.lever_slugs:
-            context = await new_stealth_context(browser)
-            page = await context.new_page()
-            jobs = await LeverSource.scrape(slug, page)
-            all_jobs.extend(jobs)
-            await context.close()
-
-        # Wellfound
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await WellfoundSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        await browser.close()
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    all_jobs: list[JobListing] = []
+    for result in results:
+        if isinstance(result, list):
+            all_jobs.extend(result)
+        elif isinstance(result, Exception):
+            print(f"Source error: {result}")
 
     print(f"\nTotal collected: {len(all_jobs)}")
 
@@ -107,19 +66,16 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
             unique.append(j)
     print(f"Unique after dedup: {len(unique)}")
 
-    from datetime import datetime, timedelta
-
     if config.hours_since_posted:
         cutoff = datetime.now() - timedelta(hours=config.hours_since_posted)
         recent = []
         for job in unique:
             posted = parse_relative_time(job.posted_date or "")
-            if posted and posted >= cutoff:
-                recent.append(job)
-            elif not job.posted_date:
+            # Keep job if posted time is recent OR if we couldn't parse it
+            if posted is None or posted >= cutoff:
                 recent.append(job)
         unique = recent
-        print(f"Jobs posted within last {config.hours_since_posted}h: {len(unique)}")
+        print(f"Jobs posted within last {config.hours_since_posted}h (or unknown): {len(unique)}")
 
     if config.startup_only:
         startup_kw = ["startup", "early stage", "seed", "series a", "founding", "angel"]

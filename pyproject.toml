@@ -1,11 +1,14 @@
 [project]
 name = "job-bot"
-version = "0.2.0"
+version = "0.3.0"
 description = "Job Link Aggregator + Smart Filter — find jobs and apply with AI assistance"
 requires-python = ">=3.12"
 dependencies = [
     "playwright>=1.50",
-    "httpx>=0.28",
+    "httpx[http2]>=0.27.0",
+    "beautifulsoup4>=4.12.0",
+    "curl-cffi>=0.7.0",
+    "feedparser>=6.0.0",
 ]
 
 [project.optional-dependencies]

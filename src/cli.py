@@ -87,4 +87,4 @@ def main():
 
     save_results(jobs, config)
 
-    print("\nNext: uv run python apply.py output/jobs_to_apply_*.txt")
+    print("\nNext: uv run python apply.py output/jobs_to_apply/jobs_to_apply_*.txt")

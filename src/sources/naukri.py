@@ -1,7 +1,7 @@
-import asyncio
 from urllib.parse import quote
 
-from playwright.async_api import Page
+from bs4 import BeautifulSoup
+from curl_cffi.requests import AsyncSession
 
 from src.config import SearchConfig
 from src.models import JobListing
@@ -19,88 +19,120 @@ class NaukriSource:
             params["ctcFilter"] = config.naukri_salary_lakhs
         if config.remote_only:
             params["wfhType"] = "1"
-
         query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
         return f"{base}?{query}"
 
     @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
+    async def scrape(config: SearchConfig) -> list[JobListing]:
         url = NaukriSource.build_url(config)
         print(f"  Naukri: {url[:90]}...")
 
+        jobs: list[JobListing] = []
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Accept-Encoding": "gzip, deflate, br",
+            "DNT": "1",
+            "Connection": "keep-alive",
+        }
+
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(5)
+            async with AsyncSession(impersonate="chrome124") as client:
+                resp = await client.get(url, headers=headers, timeout=30)
+                if resp.status_code != 200:
+                    print(f"    Naukri returned {resp.status_code}")
+                    return jobs
 
-            # Scroll to force lazy-load render
-            for _ in range(4):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
+                text = resp.text
+                soup = BeautifulSoup(text, "html.parser")
 
-            # Try multiple selectors because Naukri changes classes often
-            listings = await page.query_selector_all(".srp-jobtuple-wrapper")
-            if not listings:
-                listings = await page.query_selector_all("article.jobTuple")
-            if not listings:
-                listings = await page.query_selector_all("div.jobTuple")
-            if not listings:
-                listings = await page.query_selector_all("[data-job-id]")
+                # Try multiple container selectors
+                listings = (
+                    soup.select(".srp-jobtuple-wrapper")
+                    or soup.select("article.jobTuple")
+                    or soup.select("div.jobTuple")
+                    or soup.select("[data-job-id]")
+                    or soup.select("div.list")
+                    or soup.select("div.job")
+                )
 
-            print(f"    Found {len(listings)} listings")
+                print(f"    Found {len(listings)} listings")
 
-            jobs: list[JobListing] = []
-            for listing in listings[:config.max_jobs_per_source]:
-                try:
-                    title_el = await listing.query_selector(
-                        "a.title, a[class*='title'], h2 a"
-                    )
-                    company_el = await listing.query_selector(
-                        "a.comp-name, [class*='comp-name'], a[href*='/company/']"
-                    )
-                    loc_el = await listing.query_selector(
-                        "span.locWdth, span[class*='loc'], div[class*='loc']"
-                    )
-                    desc_el = await listing.query_selector(
-                        "span.job-desc, span[class*='desc']"
-                    )
-                    salary_el = await listing.query_selector(
-                        "span.sal, span[class*='sal']"
-                    )
-                    exp_el = await listing.query_selector(
-                        "span.expwdth, span[class*='exp']"
-                    )
+                if not listings:
+                    # Debug: print first 800 chars of body so you can see what arrived
+                    print(f"    DEBUG HTML snippet: {text[:800]}")
 
-                    title = await title_el.inner_text() if title_el else ""
-                    href = await title_el.get_attribute("href") if title_el else ""
-                    company = await company_el.inner_text() if company_el else ""
-                    location = await loc_el.inner_text() if loc_el else ""
-                    description = await desc_el.inner_text() if desc_el else ""
-                    salary = await salary_el.inner_text() if salary_el else ""
-                    exp = await exp_el.inner_text() if exp_el else ""
-
-                    if title and href:
-                        full_url = (
-                            href
-                            if href.startswith("http")
-                            else f"https://www.naukri.com{href}"
+                for listing in listings[:config.max_jobs_per_source]:
+                    try:
+                        title_el = (
+                            listing.select_one("a.title")
+                            or listing.select_one("a.srp-jd-p-title")
+                            or listing.select_one("h2 a")
+                            or listing.select_one("a[class*='title']")
                         )
-                        jobs.append(
-                            JobListing(
-                                title=title.strip(),
-                                company=company.strip(),
-                                location=(location.strip() or exp),
-                                url=full_url,
-                                salary=salary.strip() if salary else None,
-                                description=description.strip(),
-                                source="naukri",
+                        company_el = (
+                            listing.select_one("a.comp-name")
+                            or listing.select_one("a[href*='/company/']")
+                            or listing.select_one("div.company-name")
+                            or listing.select_one("[class*='company']")
+                        )
+                        loc_el = (
+                            listing.select_one("span.locWdth")
+                            or listing.select_one("span.location")
+                            or listing.select_one("div.location")
+                            or listing.select_one("[class*='loc']")
+                        )
+                        desc_el = (
+                            listing.select_one("span.job-desc")
+                            or listing.select_one("[class*='desc']")
+                        )
+                        salary_el = (
+                            listing.select_one("span.sal")
+                            or listing.select_one("span.salary")
+                            or listing.select_one("[class*='salary']")
+                        )
+                        exp_el = (
+                            listing.select_one("span.expwdth")
+                            or listing.select_one("span.exp")
+                            or listing.select_one("[class*='exp']")
+                        )
+
+                        title = title_el.get_text(strip=True) if title_el else ""
+                        href = title_el.get("href") if title_el else ""
+                        company = company_el.get_text(strip=True) if company_el else ""
+                        location = loc_el.get_text(strip=True) if loc_el else ""
+                        description = desc_el.get_text(strip=True) if desc_el else ""
+                        salary = salary_el.get_text(strip=True) if salary_el else ""
+                        exp = exp_el.get_text(strip=True) if exp_el else ""
+
+                        if title and href:
+                            full_url = (
+                                href
+                                if href.startswith("http")
+                                else f"https://www.naukri.com{href}"
                             )
-                        )
-                except Exception:
-                    continue
+                            jobs.append(
+                                JobListing(
+                                    title=title,
+                                    company=company,
+                                    location=(location or exp),
+                                    url=full_url,
+                                    salary=salary if salary else None,
+                                    description=description,
+                                    source="naukri",
+                                )
+                            )
+                    except Exception:
+                        continue
 
-            print(f"    {len(jobs)} Naukri jobs")
-            return jobs
+                print(f"    {len(jobs)} Naukri jobs")
 
         except Exception as e:
             print(f"    Naukri error: {e}")
-            return []
+
+        return jobs

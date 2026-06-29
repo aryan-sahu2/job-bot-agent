@@ -25,12 +25,15 @@ async def evaluate_job(
 ) -> tuple[float, str, str | None]:
     title_company = f"{job.title} {job.company}".lower()
     desc_lower = job.description.lower()
-    combined = f"{title_company} {desc_lower}"
+    # FIX: include location so "Remote" jobs actually get the remote bonus
+    combined = f"{title_company} {desc_lower} {job.location.lower()}"
 
     score = 0.0
     reasons = []
 
-    keyword_hits = sum(1 for k in config.keywords.lower().split() if k in combined)
+    # FIX: normalize hyphens so "full-stack" matches "full stack"
+    kw_clean = config.keywords.lower().replace("-", " ")
+    keyword_hits = sum(1 for k in kw_clean.split() if k in combined)
     score += keyword_hits * 10
 
     level_map = {

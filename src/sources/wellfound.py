@@ -1,7 +1,9 @@
-import asyncio
+import json
+import re
 from urllib.parse import quote
 
-from playwright.async_api import Page
+from bs4 import BeautifulSoup
+from curl_cffi.requests import AsyncSession
 
 from src.config import SearchConfig
 from src.models import JobListing
@@ -9,104 +11,96 @@ from src.models import JobListing
 
 class WellfoundSource:
     @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
-        # Wellfound expects slugified roles like "full-stack-engineer"
+    async def scrape(config: SearchConfig) -> list[JobListing]:
         roles = quote(config.keywords.replace(" ", "-").lower())
         url = f"https://wellfound.com/jobs?roles={roles}"
-        if config.location and config.location.lower() != "remote":
-            url += f"&location={quote(config.location)}"
+        if config.remote_only:
+            url += "&remote=true"
         print(f"  Wellfound: {url[:90]}...")
 
+        jobs: list[JobListing] = []
+        kw_parts = [k for k in config.keywords.lower().split() if len(k) > 2]
+
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(5)
+            async with AsyncSession(impersonate="chrome124") as client:
+                resp = await client.get(url, timeout=30)
+                if resp.status_code != 200:
+                    print(f"    Wellfound returned {resp.status_code}")
+                    return jobs
 
-            # Infinite scroll
-            for _ in range(5):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
+                text = resp.text
+                next_data_match = re.search(
+                    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text, re.S
+                )
+                if next_data_match:
+                    data = json.loads(next_data_match.group(1))
+                    apollo = data.get("props", {}).get("pageProps", {}).get("apolloState", {})
+                    for key, node in apollo.items():
+                        if key.startswith("JobListing:"):
+                            title = node.get("title") or node.get("displayTitle", "")
+                            company_data = node.get("company")
+                            company = ""
+                            if isinstance(company_data, dict):
+                                company = company_data.get("name", "")
+                            elif isinstance(company_data, str) and company_data.startswith("Company:"):
+                                company = apollo.get(company_data, {}).get("name", "")
 
-            jobs: list[JobListing] = []
-            seen_hrefs: set[str] = set()
+                            loc = node.get("location", "Remote")
+                            href = node.get("jobUrl") or node.get("applyUrl", "")
+                            if href and not href.startswith("http"):
+                                href = f"https://wellfound.com{href}"
 
-            # Try structured cards first
-            listings = await page.query_selector_all("[data-test='job-listing']")
-            if not listings:
-                listings = await page.query_selector_all("[data-testid='job-listing']")
+                            desc = node.get("description", "")
 
-            if listings:
-                for listing in listings[:config.max_jobs_per_source]:
-                    try:
-                        link_el = await listing.query_selector("a[href*='/jobs/']")
-                        if not link_el:
+                            # Wellfound Apollo cache contains ALL jobs on the page.
+                            # Filter by keyword so we don't get Sales Reps.
+                            text_combined = f"{title} {desc}".lower()
+                            if kw_parts and not any(k in text_combined for k in kw_parts):
+                                continue
+
+                            if title and href:
+                                jobs.append(
+                                    JobListing(
+                                        title=title,
+                                        company=company,
+                                        location=loc,
+                                        url=href,
+                                        description=desc,
+                                        source="wellfound",
+                                    )
+                                )
+                else:
+                    # Fallback: link extraction
+                    soup = BeautifulSoup(text, "html.parser")
+                    seen = set()
+                    for link in soup.find_all("a", href=re.compile(r"/jobs/\d+")):
+                        href = link.get("href", "")
+                        if not href or href in seen:
                             continue
-
-                        href = await link_el.get_attribute("href")
-                        if not href or href in seen_hrefs:
-                            continue
-                        seen_hrefs.add(href)
-
-                        text = await link_el.inner_text()
-                        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-                        title = lines[0] if lines else ""
+                        seen.add(href)
+                        full_url = href if href.startswith("http") else f"https://wellfound.com{href}"
+                        text_content = link.get_text(separator=" ", strip=True)
+                        lines = [ln for ln in text_content.split("\n") if ln.strip()]
+                        title = lines[0] if lines else "Unknown"
                         company = lines[1] if len(lines) > 1 else ""
 
-                        comp_el = await listing.query_selector(
-                            "[data-test='company-name'], [class*='company']"
-                        )
-                        if comp_el:
-                            company = await comp_el.inner_text()
-
-                        full_url = (
-                            href if href.startswith("http") else f"https://wellfound.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title,
-                                company=company.strip(),
-                                location=config.location,
-                                url=full_url,
-                                source="wellfound",
-                            )
-                        )
-                    except Exception:
-                        continue
-            else:
-                # Fallback: grab every job link on the page
-                all_links = await page.query_selector_all("a[href*='/jobs/']")
-                for link in all_links[:config.max_jobs_per_source]:
-                    try:
-                        href = await link.get_attribute("href")
-                        if not href or href in seen_hrefs:
-                            continue
-                        seen_hrefs.add(href)
-
-                        text = await link.inner_text()
-                        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-                        if not lines:
+                        text_combined = f"{title}".lower()
+                        if kw_parts and not any(k in text_combined for k in kw_parts):
                             continue
 
-                        title = lines[0]
-                        company = lines[1] if len(lines) > 1 else ""
-
-                        full_url = (
-                            href if href.startswith("http") else f"https://wellfound.com{href}"
-                        )
                         jobs.append(
                             JobListing(
                                 title=title,
                                 company=company,
-                                location=config.location,
+                                location="Remote",
                                 url=full_url,
                                 source="wellfound",
                             )
                         )
-                    except Exception:
-                        continue
 
-            print(f"    {len(jobs)} Wellfound jobs")
-            return jobs
+                print(f"    {len(jobs)} Wellfound jobs")
 
         except Exception as e:
             print(f"    Wellfound error: {e}")
-            return []
+
+        return jobs

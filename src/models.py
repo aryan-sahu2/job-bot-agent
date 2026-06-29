@@ -66,7 +66,13 @@ def parse_relative_time(time_str: str) -> Optional[datetime]:
     if not time_str:
         return None
 
-    s = time_str.lower().strip()
+    s = time_str.strip()
+
+    # Date-only (e.g. 2026-06-29) — treat as unknown time so we keep the job
+    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        return None
+
+    s_lower = s.lower()
     now = datetime.now()
 
     try:
@@ -84,7 +90,7 @@ def parse_relative_time(time_str: str) -> Optional[datetime]:
         (r"(\d+)\s*month", "months"),
     ]
     for pat, unit in patterns:
-        m = re.search(pat, s)
+        m = re.search(pat, s_lower)
         if m:
             val = int(m.group(1))
             delta = {
@@ -96,7 +102,7 @@ def parse_relative_time(time_str: str) -> Optional[datetime]:
             }[unit]
             return now - delta
 
-    if any(x in s for x in ["just now", "today", "few hours"]):
+    if any(x in s_lower for x in ["just now", "today", "few hours", "just posted"]):
         return now - timedelta(hours=1)
 
     return None
