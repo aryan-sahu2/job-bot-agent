@@ -99,7 +99,7 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     print("\nEvaluating jobs...")
     evaluated = []
     for i, job in enumerate(unique):
-        print(f"  [{i+1}/{len(unique)}] {job.title[:50]}... ({job.source})")
+        print(f"  [{i + 1}/{len(unique)}] {job.title[:50]}... ({job.source})")
         score, reason, salary = await evaluate_job(job, profile, config)
         job.relevance_score = score
         job.reason = reason
@@ -129,9 +129,7 @@ def save_results(jobs: list[JobListing], config: SearchConfig, prefix: str = "")
     json_dir.mkdir(parents=True, exist_ok=True)
     txt_dir.mkdir(parents=True, exist_ok=True)
 
-    json_file = json_dir / (
-        f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json"
-    )
+    json_file = json_dir / (f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json")
     txt_file = txt_dir / (
         f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt"
     )
@@ -142,3 +140,7 @@ def save_results(jobs: list[JobListing], config: SearchConfig, prefix: str = "")
     print(f"\nSaved {len(jobs)} jobs:")
     print(f"  JSON: {json_file}")
     print(f"  URLs: {txt_file}")
+    print("\nNext steps:")
+    print("  1. uv run python src/server.py")
+    print("  2. Install jobbot-assistant.user.js in Tampermonkey")
+    print("  3. Open job URLs from output/jobs_to_apply/*.txt")

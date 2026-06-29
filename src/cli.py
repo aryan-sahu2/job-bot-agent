@@ -15,23 +15,31 @@ def main():
     parser.add_argument("--min-salary", type=int, default=None, help="Minimum salary (USD)")
     parser.add_argument("--min-lpa", type=float, default=None, help="Minimum salary in LPA")
     parser.add_argument(
-        "--experience", "-e", default=None,
+        "--experience",
+        "-e",
+        default=None,
         choices=["entry", "mid", "senior", "staff"],
     )
     parser.add_argument("--exclude", default=None, help="Comma-separated excluded keywords")
     parser.add_argument(
-        "--time-filter", default=None,
+        "--time-filter",
+        default=None,
         help="LinkedIn: r86400=24h, r604800=week",
     )
     parser.add_argument(
-        "--hours", type=int, default=None,
+        "--hours",
+        type=int,
+        default=None,
         help="Only jobs posted within last N hours",
     )
     parser.add_argument("--startup", action="store_true", default=None, help="Only startup jobs")
     parser.add_argument("--remote", action="store_true", default=None, help="Remote only")
     parser.add_argument(
-        "--no-remote", dest="remote", action="store_false",
-        default=None, help="Include non-remote",
+        "--no-remote",
+        dest="remote",
+        action="store_false",
+        default=None,
+        help="Include non-remote",
     )
 
     args = parser.parse_args()
@@ -81,4 +89,10 @@ def main():
 
     save_results(jobs, config)
 
-    print("\nNext: uv run python apply.py output/jobs_to_apply/jobs_to_apply_*.txt")
+    print("\nNext steps:")
+    print("  1. uv run python src/server.py")
+    print("  2. Install jobbot-assistant.user.js in Tampermonkey")
+    print("  3. Open job URLs from output/jobs_to_apply/*.txt")
+
+if __name__ == "__main__":
+    main()

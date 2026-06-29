@@ -1,18 +1,18 @@
 # Job Link Aggregator + Smart Filter
 
-Two scripts that replace complex automation with simple, practical workflows.
+Searches multiple job boards, scores relevance with a local LLM (Ollama), and helps you apply via a Tampermonkey userscript that runs in your real browser.
 
-## Scripts
+## Components
 
-- **`src/cli.py`** — Searches LinkedIn, Indeed, Wellfound, Naukri for jobs matching your config. Scores relevance with local LLM (Ollama). Uses `config.json` as single source of truth; CLI flags are temporary overrides.
-- **`src/apply.py`** — Opens each job URL in a visible browser, parses the posting, generates a cover letter via Ollama, fills application form fields automatically, saves a screenshot, and **pauses for your review** before submission. Detects LinkedIn login walls and skips them.
+- **`src/cli.py`** — Scrapes LinkedIn, Indeed, Wellfound, Greenhouse, Lever, Breezy, Recruitee, Workable, SmartRecruiters for jobs matching your config. Scores relevance via Ollama.
+- **`src/server.py`** — Local FastAPI server on `:8765` that serves your profile, latest jobs, and generates cover letters via Ollama.
+- **`jobbot-assistant.user.js`** — Tampermonkey userscript that injects a floating panel on job application pages (Greenhouse, Lever, Workday, LinkedIn, Indeed, and more). Fills profile fields and cover letters in one click.
 
 ## Quick Start
 
 ```bash
 # Install
 uv sync --all-extras
-playwright install chromium
 
 # Ensure Ollama is running
 ollama serve
@@ -24,10 +24,25 @@ uv run python -m src.cli
 # 3. Edit config.json with your preferences
 # 4. Run again → jobs appear in output/
 uv run python -m src.cli
+```
 
-# 5. Review output/jobs_found_*.json, edit output/jobs_to_apply_*.txt
-# 6. Apply (opens browser, you review before submit)
-uv run python src/apply.py output/jobs_to_apply_*.txt
+## Apply Workflow
+
+```bash
+# 1. Start the local server (leave running in a terminal tab)
+uv run python src/server.py
+
+# 2. Install the Tampermonkey userscript:
+#    - Install Tampermonkey extension in your browser
+#    - Click Tampermonkey → "Create a new script"
+#    - Delete the default template, paste jobbot-assistant.user.js contents, save (Ctrl+S)
+
+# 3. Open any job URL from output/jobs_to_apply/*.txt
+
+# 4. The JobBot panel appears bottom-right. Click:
+#    "Fill Profile" → fills name, email, phone
+#    "Generate Cover Letter" → scrapes job description, generates tailored letter via Ollama
+#    Upload your resume manually, review, and submit
 ```
 
 ## Configuration
@@ -59,27 +74,20 @@ uv run python -m src.cli --hours 2 --keywords "Backend Engineer"
 uv run python -m src.cli --config ~/job-bot-config.json
 ```
 
-## CDP Mode (Real Chrome)
+## Browse Jobs in Browser
 
-For sites that require login (LinkedIn Easy Apply), connect to your real Chrome:
+With the server running, open `http://127.0.0.1:8765/jobs-view` to see the latest scored jobs in a clean HTML table.
 
-```bash
-# 1. Launch real Chrome with remote debugging
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
-  --remote-debugging-port=9222 \
-  --user-data-dir="$HOME/Library/Application Support/Google/Chrome"
+## Keyboard Shortcut
 
-# 2. Log into LinkedIn manually in that window
-# 3. Run apply.py with --cdp flag
-uv run python src/apply.py --cdp output/jobs_to_apply_*.txt
-```
+On any job application page, press `Ctrl+Shift+J` to toggle the JobBot panel visibility.
 
 ## Why This Works
 
-- No bot detection fighting — reads public listings, visible browser for submissions
-- LinkedIn login walls detected and skipped automatically
-- LLM filtering — automatically skips irrelevant jobs
-- Human-in-the-loop — you review every application before it goes out
-- Simple scripts, not complex architecture
-- Local-first (Ollama, no cloud APIs)
-- Resilient — skips errors, continues
+- **Zero bot detection** — you're in your real browser with real cookies
+- **Platform-aware** — dedicated selectors for Greenhouse, Lever, Workday, LinkedIn, Indeed, Breezy, Recruitee, Workable, SmartRecruiters, Ashby
+- **Graceful fallback** — unknown sites still work via label/placeholder heuristics
+- **Local LLM** — cover letters use your Ollama model; no API keys, no data leaves your machine
+- **Human-in-the-loop** — you review every application before it goes out
+- **Simple scripts, not complex architecture**
+- **Resilient** — skips errors, continues
