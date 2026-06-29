@@ -14,6 +14,27 @@ from src.sources.linkedin import LinkedInSource
 from src.sources.naukri import NaukriSource
 from src.sources.wellfound import WellfoundSource
 
+STEALTH_SCRIPT = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
+window.chrome = { runtime: {} };
+"""
+
+async def new_stealth_context(browser):
+    context = await browser.new_context(
+        user_agent=(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/126.0.0.0 Safari/537.36"
+        ),
+        viewport={"width": 1440, "height": 900},
+        locale="en-US",
+        timezone_id="America/New_York",
+    )
+    await context.add_init_script(STEALTH_SCRIPT)
+    return context
+
 
 async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     print("=" * 60)
@@ -30,43 +51,51 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
 
-        context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        )
+        # LinkedIn
+        context = await new_stealth_context(browser)
         page = await context.new_page()
         jobs = await LinkedInSource.scrape(page, config)
         all_jobs.extend(jobs)
         await context.close()
 
-        context = await browser.new_context()
+        # Naukri
+        context = await new_stealth_context(browser)
         page = await context.new_page()
         jobs = await NaukriSource.scrape(page, config)
         all_jobs.extend(jobs)
         await context.close()
 
-        context = await browser.new_context()
+        # Indeed
+        context = await new_stealth_context(browser)
         page = await context.new_page()
         jobs = await IndeedSource.scrape(page, config)
         all_jobs.extend(jobs)
         await context.close()
 
-        greenhouse_boards = []
+        # Greenhouse — add your target company slugs here
+        greenhouse_boards = [
+            # "stripe", "airbnb", "notion", "figma"
+        ]
         for board in greenhouse_boards:
-            context = await browser.new_context()
+            context = await new_stealth_context(browser)
             page = await context.new_page()
             jobs = await GreenhouseSource.scrape(board, page)
             all_jobs.extend(jobs)
             await context.close()
 
-        lever_slugs = []
+        # Lever — add your target company slugs here
+        lever_slugs = [
+            # "netflix", "spotify", "shopify"
+        ]
         for slug in lever_slugs:
-            context = await browser.new_context()
+            context = await new_stealth_context(browser)
             page = await context.new_page()
             jobs = await LeverSource.scrape(slug, page)
             all_jobs.extend(jobs)
             await context.close()
 
-        context = await browser.new_context()
+        # Wellfound
+        context = await new_stealth_context(browser)
         page = await context.new_page()
         jobs = await WellfoundSource.scrape(page, config)
         all_jobs.extend(jobs)
@@ -111,10 +140,18 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
 
 def save_results(jobs: list[JobListing], prefix: str = ""):
     ts = datetime.now().strftime("%Y%m%d_%H%M")
-    out_dir = Path("output")
-    out_dir.mkdir(exist_ok=True)
-    json_file = out_dir / (f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json")
-    txt_file = out_dir / (f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt")
+
+    json_dir = Path("output/jobs_found")
+    txt_dir = Path("output/jobs_to_apply")
+    json_dir.mkdir(parents=True, exist_ok=True)
+    txt_dir.mkdir(parents=True, exist_ok=True)
+
+    json_file = json_dir / (
+        f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json"
+    )
+    txt_file = txt_dir / (
+        f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt"
+    )
 
     json_file.write_text(json.dumps([j.to_dict() for j in jobs], indent=2))
     txt_file.write_text("\n".join(j.url for j in jobs))

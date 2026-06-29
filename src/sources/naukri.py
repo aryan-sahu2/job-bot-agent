@@ -10,9 +10,9 @@ from src.models import JobListing
 class NaukriSource:
     @staticmethod
     def build_url(config: SearchConfig) -> str:
-        kw = config.keywords.replace(" ", "-")
-        base = f"https://www.naukri.com/{kw}-jobs"
-        params = {"k": config.keywords}
+        kw_slug = config.keywords.replace(" ", "-").lower()
+        base = f"https://www.naukri.com/{kw_slug}-jobs"
+        params: dict[str, str] = {"k": config.keywords}
         if config.naukri_experience:
             params["experience"] = config.naukri_experience
         if config.naukri_salary_lakhs:
@@ -29,24 +29,46 @@ class NaukriSource:
         print(f"  Naukri: {url[:90]}...")
 
         try:
-            await page.goto(url, wait_until="networkidle", timeout=45000)
-            await asyncio.sleep(3)
+            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+            await asyncio.sleep(5)
 
-            jobs = []
+            # Scroll to force lazy-load render
+            for _ in range(4):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await asyncio.sleep(2)
+
+            # Try multiple selectors because Naukri changes classes often
             listings = await page.query_selector_all(".srp-jobtuple-wrapper")
+            if not listings:
+                listings = await page.query_selector_all("article.jobTuple")
+            if not listings:
+                listings = await page.query_selector_all("div.jobTuple")
             if not listings:
                 listings = await page.query_selector_all("[data-job-id]")
 
             print(f"    Found {len(listings)} listings")
 
-            for listing in listings[:15]:
+            jobs: list[JobListing] = []
+            for listing in listings[:20]:
                 try:
-                    title_el = await listing.query_selector(".title, a[href*='job-interview']")
-                    company_el = await listing.query_selector(".comp-name, [class*='company']")
-                    loc_el = await listing.query_selector(".loc-wrap, [class*='location']")
-                    desc_el = await listing.query_selector(".job-desc, [class*='description']")
-                    salary_el = await listing.query_selector(".salary, [class*='salary']")
-                    exp_el = await listing.query_selector(".exp, [class*='experience']")
+                    title_el = await listing.query_selector(
+                        "a.title, a[class*='title'], h2 a"
+                    )
+                    company_el = await listing.query_selector(
+                        "a.comp-name, [class*='comp-name'], a[href*='/company/']"
+                    )
+                    loc_el = await listing.query_selector(
+                        "span.locWdth, span[class*='loc'], div[class*='loc']"
+                    )
+                    desc_el = await listing.query_selector(
+                        "span.job-desc, span[class*='desc']"
+                    )
+                    salary_el = await listing.query_selector(
+                        "span.sal, span[class*='sal']"
+                    )
+                    exp_el = await listing.query_selector(
+                        "span.expwdth, span[class*='exp']"
+                    )
 
                     title = await title_el.inner_text() if title_el else ""
                     href = await title_el.get_attribute("href") if title_el else ""
@@ -57,15 +79,22 @@ class NaukriSource:
                     exp = await exp_el.inner_text() if exp_el else ""
 
                     if title and href:
-                        jobs.append(JobListing(
-                            title=title.strip(),
-                            company=company.strip(),
-                            location=location.strip() or exp,
-                            url=href if href.startswith("http") else f"https://www.naukri.com{href}",
-                            salary=salary.strip() if salary else None,
-                            description=description.strip(),
-                            source="naukri",
-                        ))
+                        full_url = (
+                            href
+                            if href.startswith("http")
+                            else f"https://www.naukri.com{href}"
+                        )
+                        jobs.append(
+                            JobListing(
+                                title=title.strip(),
+                                company=company.strip(),
+                                location=(location.strip() or exp),
+                                url=full_url,
+                                salary=salary.strip() if salary else None,
+                                description=description.strip(),
+                                source="naukri",
+                            )
+                        )
                 except Exception:
                     continue
 
