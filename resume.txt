@@ -1,11 +1,9 @@
-Name: Alex Developer
-Email: alex@example.com
-Phone: 555-0001
+Alex Developer
+alex@example.com
+555-0001
 
-## Summary
 Full-stack software engineer with 6 years of experience building web applications with Python and TypeScript.
 
-## Experience
 Senior Software Engineer at TechStart Inc (2021 - Present)
 - Built REST APIs with FastAPI and PostgreSQL
 - Led frontend migration from Angular to React
@@ -20,8 +18,6 @@ Junior Developer at DevShop (2018 - 2019)
 - Maintained legacy PHP applications
 - Built internal tools with Python and Flask
 
-## Education
 BS Computer Science at State University (2014 - 2018)
 
-## Skills
-Python, TypeScript, React, FastAPI, Django, PostgreSQL, AWS, Docker, Git
+Skills: Python, TypeScript, React, FastAPI, Django, PostgreSQL, AWS, Docker, Git

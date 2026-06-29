@@ -1,270 +1,3 @@
-The Complete Simple Application Script
-Here's the full apply.py that was truncated:
-Python
-# apply.py — Drop this in your project root
-import asyncio
-import sys
-from pathlib import Path
-from uuid import uuid4
-
-from playwright.async_api import async_playwright
-
-
-# ─── CONFIG ──────────────────────────────────────────────────────────
-RESUME_PATH = "resume.txt"  # Your resume text
-LLM_API = "http://localhost:11434/api/generate"  # Ollama
-LLM_MODEL = "gemma3"
-
-# ─── RESUME / PROFILE ────────────────────────────────────────────────
-def load_profile():
-    text = Path(RESUME_PATH).read_text()
-    lines = text.strip().split("\n")
-    name = lines[0] if lines else "Applicant"
-    email = next((l for l in lines if "@" in l), "")
-    phone = next((l for l in lines if any(c.isdigit() for c in l) and len(l) > 9), "")
-    return {"name": name, "email": email, "phone": phone, "raw": text}
-
-
-# ─── LLM ─────────────────────────────────────────────────────────────
-async def ask_llm(prompt: str) -> str:
-    import httpx
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(LLM_API, json={
-            "model": LLM_MODEL,
-            "prompt": prompt,
-            "stream": False,
-        })
-        return r.json().get("response", "").strip()
-
-
-# ─── JOB PARSING ─────────────────────────────────────────────────────
-async def parse_job(page):
-    title = await page.evaluate("() => document.querySelector('h1')?.innerText || ''")
-    company = await page.evaluate("""
-        () => {
-            const el = document.querySelector('[class*="company"], [class*="employer"], meta[property="og:site_name"]');
-            return el?.content || el?.innerText || '';
-        }
-    """)
-    description = await page.evaluate("""
-        () => {
-            const el = document.querySelector('[class*="description"], [class*="job-description"], #jobDescriptionText');
-            return el?.innerText?.substring(0, 3000) || document.body.innerText.substring(0, 3000);
-        }
-    """)
-    return {
-        "title": title.strip(),
-        "company": company.strip(),
-        "description": description.strip(),
-    }
-
-
-# ─── ANSWER GENERATION ───────────────────────────────────────────────
-async def generate_answers(job, profile):
-    prompt = f"""You are {profile['name']}. Write a brief, professional cover letter for this job:
-
-Company: {job['company']}
-Role: {job['title']}
-Description: {job['description'][:1500]}
-
-Your profile:
-{profile['raw'][:1000]}
-
-Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience."""
-    
-    cover_letter = await ask_llm(prompt)
-    
-    return {
-        "first_name": profile["name"].split()[0],
-        "last_name": profile["name"].split()[-1] if len(profile["name"].split()) > 1 else "",
-        "email": profile["email"],
-        "phone": profile["phone"],
-        "cover_letter": cover_letter,
-        "resume": "resume.pdf",
-    }
-
-
-# ─── FORM FILLING ────────────────────────────────────────────────────
-async def fill_form(page, answers):
-    fields = await page.query_selector_all(
-        "input:not([type='hidden']):not([type='submit']), textarea, select"
-    )
-    
-    filled = 0
-    for field in fields:
-        try:
-            tag = await field.evaluate("el => el.tagName.toLowerCase()")
-            input_type = await field.evaluate("el => el.type?.toLowerCase() || 'text'")
-            name = await field.evaluate("el => el.name || ''")
-            id_val = await field.evaluate("el => el.id || ''")
-            placeholder = await field.evaluate("el => el.placeholder || ''")
-            
-            label = await field.evaluate("""
-                el => {
-                    const forLabel = document.querySelector(`label[for="${el.id}"]`);
-                    if (forLabel) return forLabel.innerText;
-                    const parentLabel = el.closest('label');
-                    if (parentLabel) return parentLabel.innerText;
-                    return el.getAttribute('aria-label') || '';
-                }
-            """)
-            
-            combined = f"{label} {placeholder} {name} {id_val}".lower()
-            value = None
-            
-            if any(k in combined for k in ["first name", "given name", "fname"]):
-                value = answers.get("first_name", "")
-            elif any(k in combined for k in ["last name", "surname", "lname"]):
-                value = answers.get("last_name", "")
-            elif "email" in combined:
-                value = answers.get("email", "")
-            elif any(k in combined for k in ["phone", "mobile", "cell"]):
-                value = answers.get("phone", "")
-            elif any(k in combined for k in ["cover letter", "additional", "message"]):
-                value = answers.get("cover_letter", "")
-            elif any(k in combined for k in ["resume", "cv", "upload"]):
-                if input_type == "file":
-                    resume_path = answers.get("resume")
-                    if resume_path and Path(resume_path).exists():
-                        await field.set_input_files(resume_path)
-                        filled += 1
-                    continue
-            elif tag == "select":
-                options = await field.query_selector_all("option")
-                for opt in options:
-                    opt_text = await opt.inner_text()
-                    if any(k in opt_text.lower() for k in ["yes", "confirm", "agree", "submit"]):
-                        await field.select_option(label=opt_text.strip())
-                        filled += 1
-                        break
-                continue
-            
-            if value:
-                await field.fill(value)
-                filled += 1
-                
-        except Exception as e:
-            print(f"  Skip field: {e}")
-            continue
-    
-    print(f"Filled {filled} fields")
-    return filled
-
-
-# ─── MAIN ────────────────────────────────────────────────────────────
-async def apply_to_job(browser, url, profile):
-    print(f"\n{'='*60}")
-    print(f"Applying to: {url}")
-    print(f"{'='*60}")
-    
-    context = await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    )
-    page = await context.new_page()
-    
-    try:
-        await page.goto(url, wait_until="networkidle", timeout=30000)
-        
-        job = await parse_job(page)
-        print(f"Job: {job['title']} at {job['company']}")
-        
-        print("Generating answers...")
-        answers = await generate_answers(job, profile)
-        
-        apply_selectors = [
-            "button:has-text('Apply')",
-            "button:has-text('Apply Now')", 
-            "a:has-text('Apply')",
-            "[data-testid*='apply']",
-            "input[type='submit'][value*='Apply']",
-        ]
-        
-        apply_clicked = False
-        for sel in apply_selectors:
-            try:
-                btn = await page.query_selector(sel)
-                if btn and await btn.is_visible():
-                    await btn.click()
-                    apply_clicked = True
-                    print("Clicked Apply button")
-                    await asyncio.sleep(2)
-                    break
-            except:
-                continue
-        
-        if not apply_clicked:
-            print("No apply button found — may already be on application form")
-        
-        print("Filling form...")
-        filled = await fill_form(page, answers)
-        
-        screenshot_path = f"screenshots/{uuid4().hex[:8]}.png"
-        Path("screenshots").mkdir(exist_ok=True)
-        await page.screenshot(path=screenshot_path, full_page=True)
-        print(f"Screenshot saved: {screenshot_path}")
-        
-        print("\n" + "="*60)
-        print("FORM FILLED — REVIEW BEFORE SUBMITTING")
-        print("="*60)
-        input("Press Enter AFTER you review and submit (or Ctrl+C to skip)... ")
-        
-        print("Done with this job.\n")
-        
-    except Exception as e:
-        print(f"ERROR: {e}")
-        await page.screenshot(path=f"screenshots/error_{uuid4().hex[:8]}.png")
-    finally:
-        await context.close()
-
-
-async def main():
-    if len(sys.argv) < 2:
-        print("Usage: python apply.py <job_url_file_or_url>")
-        print("\nExample:")
-        print('  python apply.py "https://boards.greenhouse.io/company/jobs/123"')
-        print("\nOr create a file with one URL per line:")
-        print("  python apply.py jobs.txt")
-        sys.exit(1)
-    
-    arg = sys.argv[1]
-    
-    if Path(arg).exists():
-        urls = [l.strip() for l in Path(arg).read_text().split("\n") if l.strip()]
-    else:
-        urls = [arg]
-    
-    profile = load_profile()
-    print(f"Loaded profile for: {profile['name']}")
-    
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=False)
-        
-        for url in urls:
-            await apply_to_job(browser, url, profile)
-        
-        await browser.close()
-    
-    print("\nAll done!")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-How to use it:
-bash
-# 1. Put your resume as resume.txt in the project root
-# 2. Create jobs.txt with one URL per line
-# 3. Run
-uv run python apply.py jobs.txt
-The New Direction: Job Link Aggregator + Smart Filter
-Forget the screen-reading approach. Here's what actually works in 2026 — a Job Aggregator that searches multiple boards, filters by your criteria, scores relevance with an LLM, and outputs a curated list of URLs you can feed into apply.py.
-Why this works:
-No bot detection — you're just reading public job listings
-No form complexity — you collect links, not submit forms
-LLM filtering — automatically skips jobs that don't match your skills/salary requirements
-Human-in-the-loop — you review before applying
-aggregator.py — The Complete Job Aggregator
-Python
 #!/usr/bin/env python3
 """Job Link Aggregator — searches multiple boards and filters by relevance."""
 
@@ -273,7 +6,6 @@ import json
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -290,7 +22,7 @@ class SearchConfig:
     remote_only: bool = True
     experience_level: str = "mid"    # "entry", "mid", "senior", "staff"
     exclude_keywords: list[str] = None  # e.g. ["php", "wordpress", "salesforce"]
-    
+
     def __post_init__(self):
         if self.exclude_keywords is None:
             self.exclude_keywords = []
@@ -314,7 +46,7 @@ class JobListing:
 # ─── LLM EVALUATION ──────────────────────────────────────────────────
 async def evaluate_job_with_llm(job: JobListing, profile: str, config: SearchConfig) -> tuple[float, str]:
     """Use local LLM to score job relevance and extract salary."""
-    
+
     prompt = f"""Rate this job's relevance for the candidate on a scale of 0-100.
 
 Candidate Profile:
@@ -336,7 +68,7 @@ Respond ONLY in this JSON format:
 {{"score": 75, "salary": "$120k-$150k", "reason": "Strong match for Python backend skills, remote friendly"}}
 
 If no salary is mentioned, use null for salary. If the job requires skills the candidate doesn't have (like {', '.join(config.exclude_keywords)}), score below 30."""
-    
+
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
@@ -344,7 +76,7 @@ If no salary is mentioned, use null for salary. If the job requires skills the c
                 json={"model": "gemma3", "prompt": prompt, "stream": False}
             )
             text = r.json().get("response", "")
-            
+
             # Extract JSON
             json_match = re.search(r'\{.*\}', text, re.DOTALL)
             if json_match:
@@ -355,16 +87,16 @@ If no salary is mentioned, use null for salary. If the job requires skills the c
                 return score, salary, reason
     except Exception as e:
         print(f"  LLM eval failed: {e}")
-    
+
     return 0.0, None, "Evaluation failed"
 
 
 # ─── SOURCES ─────────────────────────────────────────────────────────
 class LinkedInSource:
     """Search LinkedIn jobs via direct URL construction."""
-    
+
     BASE_URL = "https://www.linkedin.com/jobs/search"
-    
+
     @staticmethod
     def build_url(config: SearchConfig) -> str:
         params = {
@@ -374,30 +106,30 @@ class LinkedInSource:
         }
         query = "&".join(f"{k}={v.replace(' ', '%20')}" for k, v in params.items() if v)
         return f"{LinkedInSource.BASE_URL}?{query}"
-    
+
     @staticmethod
     async def scrape(page, config: SearchConfig) -> list[JobListing]:
         url = LinkedInSource.build_url(config)
         print(f"  Scraping LinkedIn: {url[:80]}...")
-        
+
         await page.goto(url, wait_until="networkidle", timeout=30000)
         await asyncio.sleep(3)  # Let lazy-load cards appear
-        
+
         jobs = []
         cards = await page.query_selector_all(".base-card")
-        
+
         for card in cards[:20]:  # Limit to first 20
             try:
                 title_el = await card.query_selector(".base-search-card__title")
                 company_el = await card.query_selector(".base-search-card__subtitle")
                 loc_el = await card.query_selector(".job-search-card__location")
                 link_el = await card.query_selector("a.base-card__full-link")
-                
+
                 title = await title_el.inner_text() if title_el else ""
                 company = await company_el.inner_text() if company_el else ""
                 location = await loc_el.inner_text() if loc_el else ""
                 href = await link_el.get_attribute("href") if link_el else ""
-                
+
                 if title and href:
                     jobs.append(JobListing(
                         title=title.strip(),
@@ -408,37 +140,37 @@ class LinkedInSource:
                     ))
             except Exception:
                 continue
-        
+
         print(f"  Found {len(jobs)} LinkedIn jobs")
         return jobs
 
 
 class GreenhouseSource:
     """Search Greenhouse boards."""
-    
+
     @staticmethod
     async def scrape(board_slug: str, page) -> list[JobListing]:
         url = f"https://boards.greenhouse.io/{board_slug}"
         print(f"  Scraping Greenhouse: {url}")
-        
+
         try:
             await page.goto(url, wait_until="networkidle", timeout=20000)
-            
+
             jobs = []
             listings = await page.query_selector_all(".opening")
-            
+
             for listing in listings:
                 title_el = await listing.query_selector("a")
                 if not title_el:
                     continue
-                    
+
                 title = await title_el.inner_text()
                 href = await title_el.get_attribute("href")
-                
+
                 # Get location from parent
                 loc_el = await listing.query_selector(".location")
                 location = await loc_el.inner_text() if loc_el else ""
-                
+
                 if title and href:
                     full_url = href if href.startswith("http") else f"https://boards.greenhouse.io{href}"
                     jobs.append(JobListing(
@@ -448,10 +180,10 @@ class GreenhouseSource:
                         url=full_url,
                         source="greenhouse"
                     ))
-            
+
             print(f"  Found {len(jobs)} Greenhouse jobs for {board_slug}")
             return jobs
-            
+
         except Exception as e:
             print(f"  Greenhouse error: {e}")
             return []
@@ -459,34 +191,34 @@ class GreenhouseSource:
 
 class LeverSource:
     """Search Lever job boards."""
-    
+
     @staticmethod
     async def scrape(company_slug: str, page) -> list[JobListing]:
         url = f"https://jobs.lever.co/{company_slug}"
         print(f"  Scraping Lever: {url}")
-        
+
         try:
             await page.goto(url, wait_until="networkidle", timeout=20000)
-            
+
             jobs = []
             listings = await page.query_selector_all(".posting")
-            
+
             for listing in listings:
                 title_el = await listing.query_selector("h5[data-qa='posting-title']")
                 if not title_el:
                     title_el = await listing.query_selector(".posting-title")
-                
+
                 if not title_el:
                     continue
-                    
+
                 title = await title_el.inner_text()
                 link_el = await listing.query_selector("a")
                 href = await link_el.get_attribute("href") if link_el else ""
-                
+
                 # Location
                 loc_el = await listing.query_selector(".sort-by-time, .posting-category")
                 location = await loc_el.inner_text() if loc_el else ""
-                
+
                 if title and href:
                     jobs.append(JobListing(
                         title=title.strip(),
@@ -495,10 +227,10 @@ class LeverSource:
                         url=href,
                         source="lever"
                     ))
-            
+
             print(f"  Found {len(jobs)} Lever jobs for {company_slug}")
             return jobs
-            
+
         except Exception as e:
             print(f"  Lever error: {e}")
             return []
@@ -506,32 +238,32 @@ class LeverSource:
 
 class WellfoundSource:
     """Search Wellfound (formerly AngelList)."""
-    
+
     @staticmethod
     async def scrape(page, config: SearchConfig) -> list[JobListing]:
         url = f"https://wellfound.com/jobs?roles={'+'.join(config.keywords)}&location={config.location.replace(' ', '%20')}"
-        print(f"  Scraping Wellfound...")
-        
+        print("  Scraping Wellfound...")
+
         try:
             await page.goto(url, wait_until="networkidle", timeout=30000)
             await asyncio.sleep(2)
-            
+
             jobs = []
             # Wellfound uses dynamic loading, try common selectors
             listings = await page.query_selector_all("[data-test='job-listing']")
             if not listings:
                 listings = await page.query_selector_all(".styles_jobListing__")
-            
+
             for listing in listings[:15]:
                 try:
                     title_el = await listing.query_selector("[data-test='role-title']")
                     company_el = await listing.query_selector("[data-test='company-name']")
                     link_el = await listing.query_selector("a")
-                    
+
                     title = await title_el.inner_text() if title_el else ""
                     company = await company_el.inner_text() if company_el else ""
                     href = await link_el.get_attribute("href") if link_el else ""
-                    
+
                     if title and href:
                         full_url = href if href.startswith("http") else f"https://wellfound.com{href}"
                         jobs.append(JobListing(
@@ -543,10 +275,10 @@ class WellfoundSource:
                         ))
                 except:
                     continue
-            
+
             print(f"  Found {len(jobs)} Wellfound jobs")
             return jobs
-            
+
         except Exception as e:
             print(f"  Wellfound error: {e}")
             return []
@@ -557,22 +289,22 @@ async def aggregate_jobs(config: SearchConfig, profile_text: str) -> list[JobLis
     print("=" * 60)
     print("JOB AGGREGATOR")
     print("=" * 60)
-    
+
     all_jobs = []
-    
+
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)  # Headless for scraping
-        
+
         # LinkedIn
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
         )
         page = await context.new_page()
-        
+
         linkedin_jobs = await LinkedInSource.scrape(page, config)
         all_jobs.extend(linkedin_jobs)
         await context.close()
-        
+
         # Greenhouse boards (add your target companies)
         greenhouse_boards = [
             # Add company slugs here, e.g.:
@@ -584,7 +316,7 @@ async def aggregate_jobs(config: SearchConfig, profile_text: str) -> list[JobLis
             jobs = await GreenhouseSource.scrape(board, page)
             all_jobs.extend(jobs)
             await context.close()
-        
+
         # Lever boards (add your target companies)
         lever_slugs = [
             # Add company slugs here, e.g.:
@@ -596,18 +328,18 @@ async def aggregate_jobs(config: SearchConfig, profile_text: str) -> list[JobLis
             jobs = await LeverSource.scrape(slug, page)
             all_jobs.extend(jobs)
             await context.close()
-        
+
         # Wellfound
         context = await browser.new_context()
         page = await context.new_page()
         wellfound_jobs = await WellfoundSource.scrape(page, config)
         all_jobs.extend(wellfound_jobs)
         await context.close()
-        
+
         await browser.close()
-    
+
     print(f"\nTotal raw jobs collected: {len(all_jobs)}")
-    
+
     # Deduplicate by URL
     seen = set()
     unique_jobs = []
@@ -615,36 +347,36 @@ async def aggregate_jobs(config: SearchConfig, profile_text: str) -> list[JobLis
         if job.url not in seen:
             seen.add(job.url)
             unique_jobs.append(job)
-    
+
     print(f"Unique jobs after dedup: {len(unique_jobs)}")
-    
+
     # Evaluate with LLM
     print("\nEvaluating jobs with LLM...")
     evaluated = []
-    
+
     for i, job in enumerate(unique_jobs):
         print(f"  [{i+1}/{len(unique_jobs)}] {job.title[:50]}...")
         score, salary, reason = await evaluate_job_with_llm(job, profile_text, config)
         job.relevance_score = score
         job.salary = salary
         job.reason = reason
-        
+
         # Filter by score and exclusions
         if score < 30:
             print(f"    ↳ Skipped (score {score}): {reason}")
             continue
-            
+
         desc_lower = job.description.lower()
         if any(excl in desc_lower for excl in config.exclude_keywords):
-            print(f"    ↳ Skipped (excluded keyword match)")
+            print("    ↳ Skipped (excluded keyword match)")
             continue
-            
+
         evaluated.append(job)
         print(f"    ↳ Score {score}: {reason}")
-    
+
     # Sort by score
     evaluated.sort(key=lambda x: x.relevance_score, reverse=True)
-    
+
     return evaluated
 
 
@@ -661,10 +393,10 @@ def save_results(jobs: list[JobListing], filename: str = "jobs_found.json"):
             "reason": job.reason,
             "source": job.source,
         })
-    
+
     Path(filename).write_text(json.dumps(data, indent=2))
     print(f"\nSaved {len(jobs)} jobs to {filename}")
-    
+
     # Also save as plain URL list for apply.py
     urls = [job.url for job in jobs]
     Path("jobs_to_apply.txt").write_text("\n".join(urls))
@@ -676,9 +408,9 @@ async def main():
     if not Path("resume.txt").exists():
         print("Create resume.txt with your profile first!")
         sys.exit(1)
-    
+
     profile = Path("resume.txt").read_text()
-    
+
     # Configure search
     config = SearchConfig(
         keywords=["python", "backend", "engineer"],  # Change to your skills
@@ -688,13 +420,13 @@ async def main():
         experience_level="senior",
         exclude_keywords=["php", "wordpress", "salesforce", "drupal"],
     )
-    
+
     jobs = await aggregate_jobs(config, profile)
-    
+
     print("\n" + "=" * 60)
     print(f"TOP {min(10, len(jobs))} MATCHES")
     print("=" * 60)
-    
+
     for job in jobs[:10]:
         print(f"\n{job.title}")
         print(f"  {job.company} | {job.location}")
@@ -702,9 +434,9 @@ async def main():
         print(f"  Salary: {job.salary or 'Not listed'}")
         print(f"  Why: {job.reason}")
         print(f"  URL: {job.url}")
-    
+
     save_results(jobs)
-    
+
     print("\nNext steps:")
     print("  1. Review jobs_found.json")
     print("  2. Edit jobs_to_apply.txt to remove any you don't want")
@@ -713,64 +445,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-The Complete Workflow
-Step 1: Set up
-bash
-# Create your profile
-cat > resume.txt << 'EOF'
-John Doe
-john@example.com
-+1-555-123-4567
-
-Senior Python Backend Engineer with 8 years experience.
-Expert in FastAPI, Django, PostgreSQL, Redis, Docker, AWS.
-Led team of 5 at fintech startup. 
-Looking for remote roles $150k+.
-Not interested in PHP, WordPress, or frontend-only roles.
-EOF
-
-# Install dependencies
-uv add playwright httpx
-playwright install chromium
-Step 2: Find jobs
-bash
-uv run python aggregator.py
-# This outputs jobs_found.json and jobs_to_apply.txt
-Step 3: Apply with assistance
-bash
-uv run python apply.py jobs_to_apply.txt
-# Opens each job in a visible browser, fills what it can, pauses for your review
-Why This Actually Works
-Table
-Your Old Approach	This New Approach
-Screen-reading via Accessibility APIs	Direct URL scraping + Playwright DOM
-Tries to "see" your browser	Opens jobs directly in controllable browser
-30 fake fields detected	Real form fields filled via CSS selectors
-No visibility into what happened	Screenshots saved, browser visible, human review
-Complex 2000+ line architecture	Two 200-line scripts
-Fights bot detection	Human-in-the-loop submission
-Single-threaded, crashes	Resilient, skips errors, continues
-Pro Tips to Make This Even Better
-Add company-specific Greenhouse/Lever boards in aggregator.py — target companies you actually want to work for.
-Use a job alert service like https://github.com/philippta/flyscrape or set up GitHub Actions to run aggregator.py daily and email you new matches.
-For salary data, integrate with levels.fyi API or scrape their pages to verify compensation before applying.
-For the "Easy Apply" experience on LinkedIn specifically, you can use a simplified LinkedIn-only version that clicks through their one-click apply flow — but that's a separate script since LinkedIn aggressively blocks bots.
-Store your applications in a simple SQLite database to track where you've applied:
-Python
-# Add to apply.py
-import sqlite3
-def log_application(url, company, title, status):
-    conn = sqlite3.connect("applications.db")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS applications (
-            url TEXT PRIMARY KEY,
-            company TEXT,
-            title TEXT,
-            status TEXT,
-            applied_date TEXT
-        )
-    """)
-    conn.execute("INSERT OR REPLACE INTO applications VALUES (?, ?, ?, ?, ?)",
-        (url, company, title, status, datetime.now().isoformat()))
-    conn.commit()
-This is the direction that actually ships. The aggregator finds the jobs, the LLM filters them, and the assistant helps you apply faster — but you stay in control. No broken Accessibility APIs, no fighting bot detection, no phantom fields.

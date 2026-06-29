@@ -1,22 +1,17 @@
 [project]
 name = "job-bot"
-version = "0.1.0"
-description = "Local-first AI Career Assistant"
+version = "0.2.0"
+description = "Job Link Aggregator + Smart Filter — find jobs and apply with AI assistance"
 requires-python = ">=3.12"
 dependencies = [
     "playwright>=1.50",
-    "pydantic>=2.0",
-    "pyyaml>=6.0",
     "httpx>=0.28",
-    "pyobjc-core>=10.0",
-    "pynput>=1.7",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
-    "respx>=0.22",
     "ruff>=0.8",
 ]
 
@@ -29,7 +24,3 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.ruff.format]
 quote-style = "double"
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py"]
