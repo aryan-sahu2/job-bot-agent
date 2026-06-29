@@ -1,524 +1,302 @@
-The root cause is bot detection + stale selectors. LinkedIn is more permissive, but Naukri, Indeed, and Wellfound aggressively block headless Chromium or use dynamic class names that changed since the code was written.
-Here is exactly what to change — copy-paste replace these 4 files:
-1. src/aggregator.py
-Add stealth anti-detection to every browser context, and save into the subdirectories you asked for.
+The error happens because LinkedIn (and the Google Sign-In widget it uses) detects that Chromium is being controlled by Playwright. The browser leaks automation signals: navigator.webdriver=true, the --enable-automation flag, missing plugins, etc. Your aggregator.py already has a STEALTH_SCRIPT, but apply.py doesn't use it at all.
+Here is the fix. You need to do two things:
+Mask the automation fingerprints (stealth script + launch args).
+Use a persistent browser profile so you can log in manually once and stay authenticated across runs.
+Changes to src/apply.py
+Replace the top imports and the two functions below. The rest of the file stays the same.
 Python
-import json
-from datetime import datetime
+import asyncio
+import sys
 from pathlib import Path
+from uuid import uuid4
 
+import httpx
 from playwright.async_api import async_playwright
 
-from src.config import SearchConfig
-from src.llm import evaluate_job
-from src.models import JobListing
-from src.sources.greenhouse import GreenhouseSource
-from src.sources.indeed import IndeedSource
-from src.sources.lever import LeverSource
-from src.sources.linkedin import LinkedInSource
-from src.sources.naukri import NaukriSource
-from src.sources.wellfound import WellfoundSource
+# Import the stealth script from your aggregator (or paste it here)
+from src.aggregator import STEALTH_SCRIPT
 
-STEALTH_SCRIPT = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-window.chrome = { runtime: {} };
-"""
-
-async def new_stealth_context(browser):
-    context = await browser.new_context(
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/126.0.0.0 Safari/537.36"
-        ),
-        viewport={"width": 1440, "height": 900},
-        locale="en-US",
-        timezone_id="America/New_York",
-    )
-    await context.add_init_script(STEALTH_SCRIPT)
-    return context
+RESUME_PATH = "resume.txt"
+LLM_API = "http://localhost:11434/api/generate"
+LLM_MODEL = "gemma3"
 
 
-async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
-    print("=" * 60)
-    print("JOB AGGREGATOR")
-    print(f"Keywords: {config.keywords}")
-    print(f"Location: {config.location}")
-    print(f"Min Salary: {config.min_salary or 'Any'}")
-    print(f"Experience: {config.experience_level}")
-    print(f"Exclude: {', '.join(config.exclude_keywords)}")
-    print("=" * 60)
-
-    all_jobs = []
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-
-        # LinkedIn
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await LinkedInSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        # Naukri
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await NaukriSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        # Indeed
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await IndeedSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        # Greenhouse — add your target company slugs here
-        greenhouse_boards = [
-            # "stripe", "airbnb", "notion", "figma"
-        ]
-        for board in greenhouse_boards:
-            context = await new_stealth_context(browser)
-            page = await context.new_page()
-            jobs = await GreenhouseSource.scrape(board, page)
-            all_jobs.extend(jobs)
-            await context.close()
-
-        # Lever — add your target company slugs here
-        lever_slugs = [
-            # "netflix", "spotify", "shopify"
-        ]
-        for slug in lever_slugs:
-            context = await new_stealth_context(browser)
-            page = await context.new_page()
-            jobs = await LeverSource.scrape(slug, page)
-            all_jobs.extend(jobs)
-            await context.close()
-
-        # Wellfound
-        context = await new_stealth_context(browser)
-        page = await context.new_page()
-        jobs = await WellfoundSource.scrape(page, config)
-        all_jobs.extend(jobs)
-        await context.close()
-
-        await browser.close()
-
-    print(f"\nTotal collected: {len(all_jobs)}")
-
-    seen = set()
-    unique = []
-    for j in all_jobs:
-        if j.url not in seen:
-            seen.add(j.url)
-            unique.append(j)
-    print(f"Unique after dedup: {len(unique)}")
-
-    print("\nEvaluating jobs...")
-    evaluated = []
-    for i, job in enumerate(unique):
-        print(f"  [{i+1}/{len(unique)}] {job.title[:50]}... ({job.source})")
-        score, reason, salary = await evaluate_job(job, profile, config)
-        job.relevance_score = score
-        job.reason = reason
-        if salary:
-            job.salary = salary
-
-        if score < 20:
-            print(f"    Skipped (score {score:.0f})")
-            continue
-        combined = f"{job.title} {job.description}".lower()
-        if any(ex.lower() in combined for ex in config.exclude_keywords):
-            print("    Skipped (excluded keyword)")
-            continue
-
-        evaluated.append(job)
-        print(f"    Score {score:.0f}: {reason}")
-
-    evaluated.sort(key=lambda x: x.relevance_score, reverse=True)
-    return evaluated
+def load_profile():
+    text = Path(RESUME_PATH).read_text()
+    lines = text.strip().split("\n")
+    name = lines[0] if lines else "Applicant"
+    email = next((line for line in lines if "@" in line), "")
+    phone = next((line for line in lines if any(c.isdigit() for c in line) and len(line) > 9), "")
+    return {"name": name, "email": email, "phone": phone, "raw": text}
 
 
-def save_results(jobs: list[JobListing], prefix: str = ""):
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
-
-    json_dir = Path("output/jobs_found")
-    txt_dir = Path("output/jobs_to_apply")
-    json_dir.mkdir(parents=True, exist_ok=True)
-    txt_dir.mkdir(parents=True, exist_ok=True)
-
-    json_file = json_dir / (
-        f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json"
-    )
-    txt_file = txt_dir / (
-        f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt"
-    )
-
-    json_file.write_text(json.dumps([j.to_dict() for j in jobs], indent=2))
-    txt_file.write_text("\n".join(j.url for j in jobs))
-
-    print(f"\nSaved {len(jobs)} jobs:")
-    print(f"  JSON: {json_file}")
-    print(f"  URLs: {txt_file}")
-2. src/sources/naukri.py
-Naukri obfuscates classes and lazy-loads content. This version scrolls, waits longer, and tries multiple selector fallbacks.
-Python
-import asyncio
-from urllib.parse import quote
-
-from playwright.async_api import Page
-
-from src.config import SearchConfig
-from src.models import JobListing
+async def ask_llm(prompt: str) -> str:
+    async with httpx.AsyncClient(timeout=120) as client:
+        r = await client.post(LLM_API, json={
+            "model": LLM_MODEL,
+            "prompt": prompt,
+            "stream": False,
+        })
+        return r.json().get("response", "").strip()
 
 
-class NaukriSource:
-    @staticmethod
-    def build_url(config: SearchConfig) -> str:
-        kw_slug = config.keywords.replace(" ", "-").lower()
-        base = f"https://www.naukri.com/{kw_slug}-jobs"
-        params: dict[str, str] = {"k": config.keywords}
-        if config.naukri_experience:
-            params["experience"] = config.naukri_experience
-        if config.naukri_salary_lakhs:
-            params["ctcFilter"] = config.naukri_salary_lakhs
-        if config.remote_only:
-            params["wfhType"] = "1"
-
-        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        return f"{base}?{query}"
-
-    @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
-        url = NaukriSource.build_url(config)
-        print(f"  Naukri: {url[:90]}...")
-
-        try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(5)
-
-            # Scroll to force lazy-load render
-            for _ in range(4):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
-
-            # Try multiple selectors because Naukri changes classes often
-            listings = await page.query_selector_all(".srp-jobtuple-wrapper")
-            if not listings:
-                listings = await page.query_selector_all("article.jobTuple")
-            if not listings:
-                listings = await page.query_selector_all("div.jobTuple")
-            if not listings:
-                listings = await page.query_selector_all("[data-job-id]")
-
-            print(f"    Found {len(listings)} listings")
-
-            jobs: list[JobListing] = []
-            for listing in listings[:20]:
-                try:
-                    title_el = await listing.query_selector(
-                        "a.title, a[class*='title'], h2 a"
-                    )
-                    company_el = await listing.query_selector(
-                        "a.comp-name, [class*='comp-name'], a[href*='/company/']"
-                    )
-                    loc_el = await listing.query_selector(
-                        "span.locWdth, span[class*='loc'], div[class*='loc']"
-                    )
-                    desc_el = await listing.query_selector(
-                        "span.job-desc, span[class*='desc']"
-                    )
-                    salary_el = await listing.query_selector(
-                        "span.sal, span[class*='sal']"
-                    )
-                    exp_el = await listing.query_selector(
-                        "span.expwdth, span[class*='exp']"
-                    )
-
-                    title = await title_el.inner_text() if title_el else ""
-                    href = await title_el.get_attribute("href") if title_el else ""
-                    company = await company_el.inner_text() if company_el else ""
-                    location = await loc_el.inner_text() if loc_el else ""
-                    description = await desc_el.inner_text() if desc_el else ""
-                    salary = await salary_el.inner_text() if salary_el else ""
-                    exp = await exp_el.inner_text() if exp_el else ""
-
-                    if title and href:
-                        full_url = (
-                            href
-                            if href.startswith("http")
-                            else f"https://www.naukri.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title.strip(),
-                                company=company.strip(),
-                                location=(location.strip() or exp),
-                                url=full_url,
-                                salary=salary.strip() if salary else None,
-                                description=description.strip(),
-                                source="naukri",
-                            )
-                        )
-                except Exception:
-                    continue
-
-            print(f"    {len(jobs)} Naukri jobs")
-            return jobs
-
-        except Exception as e:
-            print(f"    Naukri error: {e}")
-            return []
-3. src/sources/indeed.py
-Indeed serves a cookie-consent wall in many regions and uses several different card layouts. This handles the consent click and tries multiple card selectors.
-Python
-import asyncio
-from urllib.parse import quote
-
-from playwright.async_api import Page
-
-from src.config import SearchConfig
-from src.models import JobListing
-
-
-class IndeedSource:
-    @staticmethod
-    def build_url(config: SearchConfig) -> str:
-        base = "https://www.indeed.com/jobs"
-        params = {
-            "q": config.keywords,
-            "l": config.location,
-            "fromage": "1",  # last 24 hours
+async def parse_job(page):
+    title = await page.evaluate("() => document.querySelector('h1')?.innerText || ''")
+    company = await page.evaluate("""
+        () => {
+            const el = document.querySelector(
+                '[class*="company"], [class*="employer"], meta[property="og:site_name"]'
+            );
+            return el?.content || el?.innerText || '';
         }
-        if config.remote_only:
-            params["sc"] = "0kf:attr(DSQF7);"
+    """)
+    description = await page.evaluate("""
+        () => {
+            const el = document.querySelector(
+                '[class*="description"], [class*="job-description"], #jobDescriptionText'
+            );
+            return el?.innerText?.substring(0, 3000) || document.body.innerText.substring(0, 3000);
+        }
+    """)
+    return {
+        "title": title.strip(),
+        "company": company.strip(),
+        "description": description.strip(),
+    }
 
-        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        return f"{base}?{query}"
 
-    @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
-        url = IndeedSource.build_url(config)
-        print(f"  Indeed: {url[:90]}...")
+async def generate_answers(job, profile):
+    prompt = f"""You are {profile['name']}. Write a brief, professional cover letter for this job:
 
+Company: {job['company']}
+Role: {job['title']}
+Description: {job['description'][:1500]}
+
+Your profile:
+{profile['raw'][:1000]}
+
+Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience."""
+
+    cover_letter = await ask_llm(prompt)
+
+    return {
+        "first_name": profile["name"].split()[0],
+        "last_name": profile["name"].split()[-1] if len(profile["name"].split()) > 1 else "",
+        "email": profile["email"],
+        "phone": profile["phone"],
+        "cover_letter": cover_letter,
+        "resume": "resume.pdf",
+    }
+
+
+async def fill_form(page, answers):
+    fields = await page.query_selector_all(
+        "input:not([type='hidden']):not([type='submit']), textarea, select"
+    )
+
+    filled = 0
+    for field in fields:
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(4)
+            tag = await field.evaluate("el => el.tagName.toLowerCase()")
+            input_type = await field.evaluate("el => el.type?.toLowerCase() || 'text'")
+            name = await field.evaluate("el => el.name || ''")
+            id_val = await field.evaluate("el => el.id || ''")
+            placeholder = await field.evaluate("el => el.placeholder || ''")
 
-            # Dismiss cookie/consent dialogs (EU / US variants)
-            for btn_text in ["Accept", "Accept all", "Skip", "Continue"]:
-                try:
-                    btn = await page.query_selector(
-                        f"button:has-text('{btn_text}'), "
-                        f"button#onetrust-accept-btn-handler, "
-                        f".gnav-CookieConsentButton"
-                    )
-                    if btn:
-                        await btn.click()
-                        await asyncio.sleep(2)
+            label = await field.evaluate("""
+                el => {
+                    const forLabel = document.querySelector(`label[for="${el.id}"]`);
+                    if (forLabel) return forLabel.innerText;
+                    const parentLabel = el.closest('label');
+                    if (parentLabel) return parentLabel.innerText;
+                    return el.getAttribute('aria-label') || '';
+                }
+            """)
+
+            combined = f"{label} {placeholder} {name} {id_val}".lower()
+            value = None
+
+            if any(k in combined for k in ["first name", "given name", "fname"]):
+                value = answers.get("first_name", "")
+            elif any(k in combined for k in ["last name", "surname", "lname"]):
+                value = answers.get("last_name", "")
+            elif "email" in combined:
+                value = answers.get("email", "")
+            elif any(k in combined for k in ["phone", "mobile", "cell"]):
+                value = answers.get("phone", "")
+            elif any(k in combined for k in ["cover letter", "additional", "message"]):
+                value = answers.get("cover_letter", "")
+            elif any(k in combined for k in ["resume", "cv", "upload"]):
+                if input_type == "file":
+                    resume_path = answers.get("resume")
+                    if resume_path and Path(resume_path).exists():
+                        await field.set_input_files(resume_path)
+                        filled += 1
+                continue
+            elif tag == "select":
+                options = await field.query_selector_all("option")
+                for opt in options:
+                    opt_text = await opt.inner_text()
+                    if any(k in opt_text.lower() for k in ["yes", "confirm", "agree", "submit"]):
+                        await field.select_option(label=opt_text.strip())
+                        filled += 1
                         break
-                except Exception:
-                    pass
+                continue
 
-            # Scroll to load more results
-            for _ in range(3):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
-
-            # Multiple fallback selectors for job cards
-            cards = await page.query_selector_all(".job_seen_beacon")
-            if not cards:
-                cards = await page.query_selector_all("div.slider_container")
-            if not cards:
-                cards = await page.query_selector_all("div[data-testid='jobTitle-click']")
-            if not cards:
-                cards = await page.query_selector_all("div.mosaic-provider-jobcard")
-
-            print(f"    Found {len(cards)} cards")
-
-            jobs: list[JobListing] = []
-            for card in cards[:15]:
-                try:
-                    title_el = await card.query_selector(
-                        "h2 a, a.jcs-JobTitle, .jobTitle a, a[id*='job_']"
-                    )
-                    company_el = await card.query_selector(
-                        ".companyName, [data-testid='company-name'], span.company"
-                    )
-                    loc_el = await card.query_selector(
-                        "[data-testid='job-location'], div.companyLocation, span.location"
-                    )
-
-                    title = await title_el.inner_text() if title_el else ""
-                    href = await title_el.get_attribute("href") if title_el else ""
-                    company = await company_el.inner_text() if company_el else ""
-                    location = await loc_el.inner_text() if loc_el else ""
-
-                    if title and href:
-                        full_url = (
-                            href
-                            if href.startswith("http")
-                            else f"https://www.indeed.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title.strip(),
-                                company=company.strip(),
-                                location=location.strip(),
-                                url=full_url,
-                                source="indeed",
-                            )
-                        )
-                except Exception:
-                    continue
-
-            print(f"    {len(jobs)} Indeed jobs")
-            return jobs
+            if value:
+                await field.fill(value)
+                filled += 1
 
         except Exception as e:
-            print(f"    Indeed error: {e}")
-            return []
-4. src/sources/wellfound.py
-Wellfound uses Next.js with hashed class names. The most robust approach is to grab every a[href*="/jobs/"], deduplicate, and parse title/company from the link text.
-Python
-import asyncio
-from urllib.parse import quote
+            print(f"  Skip field: {e}")
+            continue
 
-from playwright.async_api import Page
-
-from src.config import SearchConfig
-from src.models import JobListing
+    print(f"Filled {filled} fields")
+    return filled
 
 
-class WellfoundSource:
-    @staticmethod
-    async def scrape(page: Page, config: SearchConfig) -> list[JobListing]:
-        # Wellfound expects slugified roles like "full-stack-engineer"
-        roles = quote(config.keywords.replace(" ", "-").lower())
-        url = f"https://wellfound.com/jobs?roles={roles}"
-        if config.location and config.location.lower() != "remote":
-            url += f"&location={quote(config.location)}"
-        print(f"  Wellfound: {url[:90]}...")
+async def apply_to_job(context, url, profile):
+    print(f"\n{'='*60}")
+    print(f"Applying to: {url}")
+    print(f"{'='*60}")
 
+    page = await context.new_page()
+
+    try:
+        # Use domcontentloaded + longer timeout; LinkedIn auth walls often block networkidle
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
+
+        job = await parse_job(page)
+        print(f"Job: {job['title']} at {job['company']}")
+
+        print("Generating answers...")
+        answers = await generate_answers(job, profile)
+
+        apply_selectors = [
+            "button:has-text('Apply')",
+            "button:has-text('Apply Now')",
+            "a:has-text('Apply')",
+            "[data-testid*='apply']",
+            "input[type='submit'][value*='Apply']",
+        ]
+
+        apply_clicked = False
+        for sel in apply_selectors:
+            try:
+                btn = await page.query_selector(sel)
+                if btn and await btn.is_visible():
+                    await btn.click()
+                    apply_clicked = True
+                    print("Clicked Apply button")
+                    await asyncio.sleep(2)
+                    break
+            except Exception:
+                continue
+
+        if not apply_clicked:
+            print("No apply button found — may already be on application form")
+
+        print("Filling form...")
+        await fill_form(page, answers)
+
+        screenshot_path = f"screenshots/{uuid4().hex[:8]}.png"
+        Path("screenshots").mkdir(exist_ok=True)
+        await page.screenshot(path=screenshot_path, full_page=True)
+        print(f"Screenshot saved: {screenshot_path}")
+
+        print("\n" + "="*60)
+        print("FORM FILLED — REVIEW BEFORE SUBMITTING")
+        print("="*60)
+        input("Press Enter AFTER you review and submit (or Ctrl+C to skip)... ")
+
+        print("Done with this job.\n")
+
+    except Exception as e:
+        print(f"ERROR: {e}")
         try:
-            await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-            await asyncio.sleep(5)
+            if not page.is_closed():
+                err_path = f"screenshots/error_{uuid4().hex[:8]}.png"
+                Path("screenshots").mkdir(exist_ok=True)
+                await page.screenshot(path=err_path, full_page=True)
+                print(f"Error screenshot saved: {err_path}")
+        except Exception as screenshot_err:
+            print(f"Could not take error screenshot: {screenshot_err}")
+    finally:
+        if not page.is_closed():
+            await page.close()
 
-            # Infinite scroll
-            for _ in range(5):
-                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                await asyncio.sleep(2)
 
-            jobs: list[JobListing] = []
-            seen_hrefs: set[str] = set()
+def main():
+    if len(sys.argv) < 2:
+        print("Usage: uv run python apply.py <job_url_file_or_url>")
+        print("\nExample:")
+        print('  uv run python apply.py "https://boards.greenhouse.io/company/jobs/123"')
+        print("\nOr create a file with one URL per line:")
+        print("  uv run python apply.py jobs.txt")
+        sys.exit(1)
 
-            # Try structured cards first
-            listings = await page.query_selector_all("[data-test='job-listing']")
-            if not listings:
-                listings = await page.query_selector_all("[data-testid='job-listing']")
+    arg = sys.argv[1]
 
-            if listings:
-                for listing in listings[:20]:
-                    try:
-                        link_el = await listing.query_selector("a[href*='/jobs/']")
-                        if not link_el:
-                            continue
+    path = Path(arg)
+    if not path.exists():
+        path = Path("output") / arg
+    if path.exists():
+        urls = [line.strip() for line in path.read_text().split("\n") if line.strip()]
+    else:
+        urls = [arg]
 
-                        href = await link_el.get_attribute("href")
-                        if not href or href in seen_hrefs:
-                            continue
-                        seen_hrefs.add(href)
+    profile = load_profile()
+    print(f"Loaded profile for: {profile['name']}")
 
-                        text = await link_el.inner_text()
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
-                        title = lines[0] if lines else ""
-                        company = lines[1] if len(lines) > 1 else ""
+    async def run():
+        async with async_playwright() as p:
+            # Persistent context keeps cookies, localStorage and login sessions on disk
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir="./browser_data",
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1440, "height": 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+            )
 
-                        comp_el = await listing.query_selector(
-                            "[data-test='company-name'], [class*='company']"
-                        )
-                        if comp_el:
-                            company = await comp_el.inner_text()
+            # Mask navigator.webdriver, plugins, chrome.runtime, etc.
+            await context.add_init_script(STEALTH_SCRIPT)
 
-                        full_url = (
-                            href if href.startswith("http") else f"https://wellfound.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title,
-                                company=company.strip(),
-                                location=config.location,
-                                url=full_url,
-                                source="wellfound",
-                            )
-                        )
-                    except Exception:
-                        continue
-            else:
-                # Fallback: grab every job link on the page
-                all_links = await page.query_selector_all("a[href*='/jobs/']")
-                for link in all_links:
-                    try:
-                        href = await link.get_attribute("href")
-                        if not href or href in seen_hrefs:
-                            continue
-                        seen_hrefs.add(href)
+            for url in urls:
+                await apply_to_job(context, url, profile)
 
-                        text = await link.inner_text()
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
-                        if not lines:
-                            continue
+            await context.close()
+        print("\nAll done!")
 
-                        title = lines[0]
-                        company = lines[1] if len(lines) > 1 else ""
+    asyncio.run(run())
+How to use it
+Delete any old ./browser_data folder if it exists from a previous failed login.
+Run the script. A real Chrome window will open.
+When LinkedIn (or any site) asks you to log in, log in manually with email/password (avoid "Sign in with Google" if possible — Google is extra aggressive about automation detection).
+Once you are logged in and can see your LinkedIn feed, close the browser window.
+From now on, every time you run apply.py, it will reuse ./browser_data and you will already be authenticated.
+Why this works
+| Detection signal                    | How the fix counters it                                    |
+| ----------------------------------- | ---------------------------------------------------------- |
+| `navigator.webdriver = true`        | `STEALTH_SCRIPT` overrides it to `undefined`               |
+| `--enable-automation` flag          | `--disable-blink-features=AutomationControlled` removes it |
+| Generic headless user agent         | Hardcoded real Chrome macOS user agent                     |
+| Missing plugins / `chrome.runtime`  | `STEALTH_SCRIPT` fakes them                                |
+| Cookies lost every run              | `launch_persistent_context` saves them to `./browser_data` |
+| `networkidle` timeout on auth walls | Changed to `domcontentloaded` with 45 s timeout            |
 
-                        full_url = (
-                            href if href.startswith("http") else f"https://wellfound.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title,
-                                company=company,
-                                location=config.location,
-                                url=full_url,
-                                source="wellfound",
-                            )
-                        )
-                    except Exception:
-                        continue
-
-            print(f"    {len(jobs)} Wellfound jobs")
-            return jobs
-
-        except Exception as e:
-            print(f"    Wellfound error: {e}")
-            return []
-What changed & why
-Table
-Platform	Problem	Fix
-All	Headless browser detected as bot	Stealth init script patches navigator.webdriver, plugins, chrome.runtime
-Naukri	Dynamic obfuscated classes, lazy load	Multiple fallback selectors + page scroll + 5s wait
-Indeed	Cookie consent wall blocks content, card class varies	Auto-clicks consent buttons + tries 4 different card selectors
-Wellfound	Hashed CSS classes, infinite scroll	Scrolls 5 times, falls back to scraping every a[href*="/jobs/"]
-Output	Saved flat in output/	Now saves JSON to output/jobs_found/ and URLs to output/jobs_to_apply/
-If you still get 0 results from Naukri / Indeed
-Those sites use Cloudflare / DataDome that detects even stealth headless browsers. The nuclear option is to connect to your real browser (Brave/Chrome) that already has cookies and a normal fingerprint:
-Step 1: Start Brave with remote debugging
-bash
-/Applications/Brave\ Browser.app/Contents/MacOS/Brave\ Browser \
-    --remote-debugging-port=9222 \
-    --user-data-dir=/tmp/brave_debug
-Step 2: In src/aggregator.py, replace:
-Python
-browser = await p.chromium.launch(headless=True)
-with:
-Python
-browser = await p.chromium.connect_over_cdp("http://localhost:9222")
-Then re-run:
-bash
-uv run python -m src.cli --keywords "Full Stack Engineer" --time-filter r6400
-This uses your real logged-in browser, so Naukri and Indeed will treat it like a normal user.
+If Google Sign-In still blocks you
+Some sites force Google OAuth. If LinkedIn keeps showing the "not secure" error even after the stealth changes:
+Use email/password login on LinkedIn instead of Google.
+Or, log in to LinkedIn on your normal Chrome browser, export cookies with an extension like EditThisCookie, and load them via Playwright's storage_state. But the persistent-context method above is usually enough.
+The screenshot crash (Target page, context or browser has been closed) is also fixed — the error handler now checks page.is_closed() before trying to screenshot.

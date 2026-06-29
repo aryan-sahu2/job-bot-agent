@@ -6,6 +6,8 @@ from uuid import uuid4
 import httpx
 from playwright.async_api import async_playwright
 
+from src.aggregator import STEALTH_SCRIPT
+
 RESUME_PATH = "resume.txt"
 LLM_API = "http://localhost:11434/api/generate"
 LLM_MODEL = "gemma3"
@@ -145,23 +147,15 @@ async def fill_form(page, answers):
     return filled
 
 
-async def apply_to_job(browser, url, profile):
+async def apply_to_job(context, url, profile):
     print(f"\n{'='*60}")
     print(f"Applying to: {url}")
     print(f"{'='*60}")
 
-    context = await browser.new_context(
-        viewport={"width": 1280, "height": 800},
-        user_agent=(
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"
-            " AppleWebKit/537.36 (KHTML, like Gecko)"
-            " Chrome/120.0.0.0 Safari/537.36"
-        )
-    )
     page = await context.new_page()
 
     try:
-        await page.goto(url, wait_until="networkidle", timeout=30000)
+        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
         job = await parse_job(page)
         print(f"Job: {job['title']} at {job['company']}")
@@ -210,9 +204,17 @@ async def apply_to_job(browser, url, profile):
 
     except Exception as e:
         print(f"ERROR: {e}")
-        await page.screenshot(path=f"screenshots/error_{uuid4().hex[:8]}.png")
+        try:
+            if not page.is_closed():
+                err_path = f"screenshots/error_{uuid4().hex[:8]}.png"
+                Path("screenshots").mkdir(exist_ok=True)
+                await page.screenshot(path=err_path, full_page=True)
+                print(f"Error screenshot saved: {err_path}")
+        except Exception as screenshot_err:
+            print(f"Could not take error screenshot: {screenshot_err}")
     finally:
-        await context.close()
+        if not page.is_closed():
+            await page.close()
 
 
 def main():
@@ -239,10 +241,30 @@ def main():
 
     async def run():
         async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=False)
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir="./browser_data",
+                headless=False,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-sandbox",
+                ],
+                user_agent=(
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1440, "height": 900},
+                locale="en-US",
+                timezone_id="America/New_York",
+            )
+
+            await context.add_init_script(STEALTH_SCRIPT)
+
             for url in urls:
-                await apply_to_job(browser, url, profile)
-            await browser.close()
+                await apply_to_job(context, url, profile)
+
+            await context.close()
         print("\nAll done!")
 
     asyncio.run(run())
