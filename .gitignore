@@ -6,6 +6,8 @@ venv/
 *.db
 .ruff_cache/
 .pytest_cache/
+browser_data/
+corrections.md
 
 # Application output
 output/

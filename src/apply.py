@@ -157,6 +157,21 @@ async def apply_to_job(context, url, profile):
     try:
         await page.goto(url, wait_until="domcontentloaded", timeout=45000)
 
+        try:
+            body_text = await page.inner_text("body", timeout=5000)
+            login_blocks = [
+                "Couldn't sign you in",
+                "This browser or app may not be secure",
+                "Sign in to LinkedIn",
+                "Join now",
+                "Be great at what you do",
+            ]
+            if any(block in body_text for block in login_blocks):
+                print("  LinkedIn login required — skipping. Apply manually.")
+                return
+        except Exception:
+            pass
+
         job = await parse_job(page)
         print(f"Job: {job['title']} at {job['company']}")
 
@@ -224,9 +239,19 @@ def main():
         print('  uv run python apply.py "https://boards.greenhouse.io/company/jobs/123"')
         print("\nOr create a file with one URL per line:")
         print("  uv run python apply.py jobs.txt")
+        print("\nCDP mode (connect to real Chrome):")
+        print("  uv run python apply.py --cdp output/jobs_to_apply_*.txt")
         sys.exit(1)
 
-    arg = sys.argv[1]
+    args_list = sys.argv[1:]
+    use_cdp = "--cdp" in args_list
+    args_list = [a for a in args_list if a != "--cdp"]
+
+    if not args_list:
+        print("ERROR: No URL file provided")
+        sys.exit(1)
+
+    arg = args_list[0]
 
     path = Path(arg)
     if not path.exists():
@@ -241,30 +266,37 @@ def main():
 
     async def run():
         async with async_playwright() as p:
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir="./browser_data",
-                headless=False,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
-                locale="en-US",
-                timezone_id="America/New_York",
-            )
+            if use_cdp:
+                browser = await p.chromium.connect_over_cdp("http://localhost:9222")
+                context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            else:
+                context = await p.chromium.launch_persistent_context(
+                    user_data_dir="./browser_data",
+                    headless=False,
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                    user_agent=(
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0.0.0 Safari/537.36"
+                    ),
+                    viewport={"width": 1440, "height": 900},
+                    locale="en-US",
+                    timezone_id="America/New_York",
+                )
 
             await context.add_init_script(STEALTH_SCRIPT)
 
             for url in urls:
                 await apply_to_job(context, url, profile)
 
-            await context.close()
+            if use_cdp:
+                await browser.close()
+            else:
+                await context.close()
         print("\nAll done!")
 
     asyncio.run(run())

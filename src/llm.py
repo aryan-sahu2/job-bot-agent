@@ -57,9 +57,17 @@ async def evaluate_job(
         reasons.append(f"Excluded keywords: {', '.join(excluded_found)}")
 
     salary_val = parse_salary(job.salary or "")
-    if config.min_salary and salary_val and salary_val < config.min_salary:
-        score -= 25
-        reasons.append(f"Salary below ${config.min_salary}")
+
+    if config.min_salary_lakhs and salary_val and salary_val > 10000:
+        lakhs = salary_val / 100000
+        if lakhs < config.min_salary_lakhs:
+            score -= 30
+            reasons.append(f"Salary {lakhs:.1f}L < {config.min_salary_lakhs}L")
+
+    if config.min_salary and salary_val and salary_val >= 10000:
+        if salary_val < config.min_salary:
+            score -= 25
+            reasons.append(f"Salary below ${config.min_salary}")
 
     if len(job.description) > 100:
         prompt = f"""Rate this job relevance 0-100 for this candidate. Be concise.

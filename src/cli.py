@@ -12,12 +12,15 @@ def main():
     parser.add_argument("--keywords", "-k", default="Full Stack Engineer", help="Job keywords")
     parser.add_argument("--location", "-l", default="Remote", help="Location")
     parser.add_argument("--min-salary", type=int, default=None, help="Minimum salary (USD)")
+    parser.add_argument("--min-lpa", type=float, default=None, help="Minimum salary in LPA (Indian market)")
     parser.add_argument("--experience", "-e", default="mid",
                         choices=["entry", "mid", "senior", "staff"])
     parser.add_argument("--exclude", default="php,wordpress,salesforce",
                         help="Comma-separated excluded keywords")
-    parser.add_argument("--time-filter", default="r6400",
-                        help="LinkedIn: r6400=2h, r86400=24h, r604800=week")
+    parser.add_argument("--time-filter", default="r86400",
+                        help="LinkedIn: r86400=24h, r604800=week")
+    parser.add_argument("--hours", type=int, default=4, help="Only jobs posted within last N hours")
+    parser.add_argument("--startup", action="store_true", help="Only startup jobs")
     parser.add_argument("--remote", action="store_true", default=True,
                         help="Remote only")
     parser.add_argument("--no-remote", dest="remote", action="store_false",
@@ -37,10 +40,13 @@ def main():
         keywords=args.keywords,
         location=args.location,
         min_salary=args.min_salary,
+        min_salary_lakhs=args.min_lpa,
         remote_only=args.remote,
         experience_level=args.experience,
         exclude_keywords=args.exclude.split(","),
         linkedin_time_filter=args.time_filter,
+        hours_since_posted=args.hours,
+        startup_only=args.startup,
         naukri_experience=args.naukri_exp,
         naukri_salary_lakhs=args.naukri_ctc,
     )

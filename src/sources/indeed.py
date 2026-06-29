@@ -80,6 +80,11 @@ class IndeedSource:
                     company = await company_el.inner_text() if company_el else ""
                     location = await loc_el.inner_text() if loc_el else ""
 
+                    date_el = await card.query_selector(
+                        "span.date, span[data-testid='job-date'], span.date"
+                    )
+                    posted = await date_el.inner_text() if date_el else ""
+
                     if title and href:
                         full_url = (
                             href
@@ -93,6 +98,7 @@ class IndeedSource:
                                 location=location.strip(),
                                 url=full_url,
                                 source="indeed",
+                                posted_date=posted,
                             )
                         )
                 except Exception:

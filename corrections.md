@@ -1,302 +1,313 @@
-The error happens because LinkedIn (and the Google Sign-In widget it uses) detects that Chromium is being controlled by Playwright. The browser leaks automation signals: navigator.webdriver=true, the --enable-automation flag, missing plugins, etc. Your aggregator.py already has a STEALTH_SCRIPT, but apply.py doesn't use it at all.
-Here is the fix. You need to do two things:
-Mask the automation fingerprints (stealth script + launch args).
-Use a persistent browser profile so you can log in manually once and stay authenticated across runs.
-Changes to src/apply.py
-Replace the top imports and the two functions below. The rest of the file stays the same.
+Create one config.json at the project root. The script will read it on every run. CLI flags become overrides — if you don’t pass a flag, the value from config.json is used.
+Here is the complete setup.
+1. Create config.json in your project root
+JSON
+{
+  "keywords": "Full Stack Engineer",
+  "location": "Remote",
+  "min_salary": null,
+  "min_salary_lakhs": 15.0,
+  "remote_only": true,
+  "experience_level": "mid",
+  "exclude_keywords": [
+    "php",
+    "wordpress",
+    "salesforce",
+    "drupal"
+  ],
+  "hours_since_posted": 4,
+  "startup_only": false,
+  "linkedin_time_filter": "r86400",
+  "linkedin_remote_filter": "2",
+  "linkedin_distance": "25",
+  "naukri_experience": "",
+  "naukri_salary_lakhs": "",
+  "greenhouse_boards": [],
+  "lever_slugs": [],
+  "max_jobs_per_source": 15,
+  "llm_api": "http://localhost:11434/api/generate",
+  "llm_model": "gemma3",
+  "llm_timeout": 90,
+  "output_dir": "output",
+  "resume_path": "resume.txt"
+}
+2. Replace src/config.py entirely
 Python
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+
+
+DEFAULT_CONFIG = {
+    "keywords": "Full Stack Engineer",
+    "location": "Remote",
+    "min_salary": None,
+    "min_salary_lakhs": 15.0,
+    "remote_only": True,
+    "experience_level": "mid",
+    "exclude_keywords": ["php", "wordpress", "salesforce", "drupal"],
+    "hours_since_posted": 4,
+    "startup_only": False,
+    "linkedin_time_filter": "r86400",
+    "linkedin_remote_filter": "2",
+    "linkedin_distance": "25",
+    "naukri_experience": "",
+    "naukri_salary_lakhs": "",
+    "greenhouse_boards": [],
+    "lever_slugs": [],
+    "max_jobs_per_source": 15,
+    "llm_api": "http://localhost:11434/api/generate",
+    "llm_model": "gemma3",
+    "llm_timeout": 90,
+    "output_dir": "output",
+    "resume_path": "resume.txt",
+}
+
+
+@dataclass
+class SearchConfig:
+    keywords: str = "Full Stack Engineer"
+    location: str = "Remote"
+    min_salary: int | None = None
+    min_salary_lakhs: float | None = None
+    remote_only: bool = True
+    experience_level: str = "mid"
+    exclude_keywords: list[str] = field(default_factory=lambda: ["php", "wordpress", "salesforce", "drupal"])
+    hours_since_posted: int = 4
+    startup_only: bool = False
+    linkedin_time_filter: str = "r86400"
+    linkedin_remote_filter: str = "2"
+    linkedin_distance: str = "25"
+    naukri_experience: str = ""
+    naukri_salary_lakhs: str = ""
+    greenhouse_boards: list[str] = field(default_factory=list)
+    lever_slugs: list[str] = field(default_factory=list)
+    max_jobs_per_source: int = 15
+    llm_api: str = "http://localhost:11434/api/generate"
+    llm_model: str = "gemma3"
+    llm_timeout: int = 90
+    output_dir: str = "output"
+    resume_path: str = "resume.txt"
+
+    def __post_init__(self):
+        if isinstance(self.exclude_keywords, str):
+            self.exclude_keywords = [k.strip() for k in self.exclude_keywords.split(",") if k.strip()]
+        if isinstance(self.greenhouse_boards, str):
+            self.greenhouse_boards = [k.strip() for k in self.greenhouse_boards.split(",") if k.strip()]
+        if isinstance(self.lever_slugs, str):
+            self.lever_slugs = [k.strip() for k in self.lever_slugs.split(",") if k.strip()]
+
+
+def load_config(path: str | Path = "config.json") -> SearchConfig:
+    """Load config from JSON. Creates a template file if missing."""
+    path = Path(path)
+
+    if not path.exists():
+        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2))
+        print(f"\n{'='*60}")
+        print(f"Created default config at {path}")
+        print("Edit it with your preferences, then run again.")
+        print(f"{'='*60}\n")
+        return SearchConfig()
+
+    data = json.loads(path.read_text())
+    # Merge with defaults so missing keys don't crash
+    merged = {**DEFAULT_CONFIG, **data}
+    return SearchConfig(**merged)
+3. Replace src/cli.py entirely
+Python
+import argparse
 import asyncio
 import sys
 from pathlib import Path
-from uuid import uuid4
 
-import httpx
-from playwright.async_api import async_playwright
+from src.aggregator import aggregate, save_results
+from src.config import load_config
 
-# Import the stealth script from your aggregator (or paste it here)
+
+def main():
+    parser = argparse.ArgumentParser(description="Job Aggregator")
+    parser.add_argument("--config", "-c", default="config.json", help="Path to config JSON")
+    parser.add_argument("--keywords", "-k", default=None, help="Job keywords")
+    parser.add_argument("--location", "-l", default=None, help="Location")
+    parser.add_argument("--min-salary", type=int, default=None, help="Minimum salary (USD)")
+    parser.add_argument("--min-lpa", type=float, default=None, help="Minimum salary in LPA")
+    parser.add_argument("--experience", "-e", default=None, choices=["entry", "mid", "senior", "staff"])
+    parser.add_argument("--exclude", default=None, help="Comma-separated excluded keywords")
+    parser.add_argument("--time-filter", default=None, help="LinkedIn: r86400=24h, r604800=week")
+    parser.add_argument("--hours", type=int, default=None, help="Only jobs posted within last N hours")
+    parser.add_argument("--startup", action="store_true", default=None, help="Only startup jobs")
+    parser.add_argument("--remote", action="store_true", default=None, help="Remote only")
+    parser.add_argument("--no-remote", dest="remote", action="store_false", default=None, help="Include non-remote")
+    parser.add_argument("--naukri-exp", default=None, help="Naukri experience filter (years)")
+    parser.add_argument("--naukri-ctc", default=None, help="Naukri CTC filter e.g. 20to50")
+
+    args = parser.parse_args()
+
+    # Load config.json (creates template if missing)
+    config = load_config(args.config)
+
+    # Override with any CLI args that were explicitly provided
+    if args.keywords is not None:
+        config.keywords = args.keywords
+    if args.location is not None:
+        config.location = args.location
+    if args.min_salary is not None:
+        config.min_salary = args.min_salary
+    if args.min_lpa is not None:
+        config.min_salary_lakhs = args.min_lpa
+    if args.experience is not None:
+        config.experience_level = args.experience
+    if args.exclude is not None:
+        config.exclude_keywords = [k.strip() for k in args.exclude.split(",") if k.strip()]
+    if args.time_filter is not None:
+        config.linkedin_time_filter = args.time_filter
+    if args.hours is not None:
+        config.hours_since_posted = args.hours
+    if args.startup is not None:
+        config.startup_only = args.startup
+    if args.remote is not None:
+        config.remote_only = args.remote
+    if args.naukri_exp is not None:
+        config.naukri_experience = args.naukri_exp
+    if args.naukri_ctc is not None:
+        config.naukri_salary_lakhs = args.naukri_ctc
+
+    if not Path(config.resume_path).exists():
+        print(f"ERROR: Create {config.resume_path} with your profile first!")
+        sys.exit(1)
+
+    profile = Path(config.resume_path).read_text()
+
+    jobs = asyncio.run(aggregate(config, profile))
+
+    print("\n" + "=" * 60)
+    print(f"TOP {min(15, len(jobs))} MATCHES")
+    print("=" * 60)
+
+    for job in jobs[:15]:
+        print(f"\n{job.title}")
+        print(f"  {job.company} | {job.location}")
+        print(f"  Score: {job.relevance_score:.0f}/100 | Source: {job.source}")
+        print(f"  Salary: {job.salary or 'Not listed'}")
+        print(f"  Why: {job.reason}")
+        print(f"  URL: {job.url}")
+
+    save_results(jobs, config)
+
+    print("\nNext: uv run python apply.py output/jobs_to_apply_*.txt")
+4. Patch src/aggregator.py
+Change the save_results signature and paths:
+Python
+def save_results(jobs: list[JobListing], config: SearchConfig, prefix: str = ""):
+    ts = datetime.now().strftime("%Y%m%d_%H%M")
+
+    json_dir = Path(config.output_dir) / "jobs_found"
+    txt_dir = Path(config.output_dir) / "jobs_to_apply"
+    json_dir.mkdir(parents=True, exist_ok=True)
+    txt_dir.mkdir(parents=True, exist_ok=True)
+    # ... rest unchanged
+Replace the hardcoded Greenhouse / Lever lists with config values:
+Python
+        # Greenhouse
+        for board in config.greenhouse_boards:
+            context = await new_stealth_context(browser)
+            page = await context.new_page()
+            jobs = await GreenhouseSource.scrape(board, page)
+            all_jobs.extend(jobs)
+            await context.close()
+
+        # Lever
+        for slug in config.lever_slugs:
+            context = await new_stealth_context(browser)
+            page = await context.new_page()
+            jobs = await LeverSource.scrape(slug, page)
+            all_jobs.extend(jobs)
+            await context.close()
+Replace every hardcoded [:15] or [:20] limit with config.max_jobs_per_source:
+In src/sources/linkedin.py: for i, card in enumerate(cards[:config.max_jobs_per_source]):
+In src/sources/indeed.py: for card in cards[:config.max_jobs_per_source]:
+In src/sources/naukri.py: for listing in listings[:config.max_jobs_per_source]:
+In src/sources/wellfound.py: for listing in listings[:config.max_jobs_per_source]: and for link in all_links[:config.max_jobs_per_source]:
+5. Patch src/llm.py
+Update ask_llm to accept model and timeout:
+Python
+async def ask_llm(prompt: str, model: str = "gemma3", timeout: int = 90) -> str:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.post(
+                "http://localhost:11434/api/generate",
+                json={"model": model, "prompt": prompt, "stream": False},
+            )
+            return r.json().get("response", "").strip()
+    except Exception as e:
+        print(f"    LLM request failed: {e}")
+        return ""
+Update the call inside evaluate_job:
+Python
+        response = await ask_llm(prompt, model=config.llm_model, timeout=config.llm_timeout)
+6. Patch src/apply.py (optional, keeps everything in one config)
+Top of file:
+Python
 from src.aggregator import STEALTH_SCRIPT
-
-RESUME_PATH = "resume.txt"
-LLM_API = "http://localhost:11434/api/generate"
-LLM_MODEL = "gemma3"
-
-
-def load_profile():
-    text = Path(RESUME_PATH).read_text()
+from src.config import load_config
+Update load_profile:
+Python
+def load_profile(resume_path: str = "resume.txt"):
+    text = Path(resume_path).read_text()
     lines = text.strip().split("\n")
     name = lines[0] if lines else "Applicant"
     email = next((line for line in lines if "@" in line), "")
     phone = next((line for line in lines if any(c.isdigit() for c in line) and len(line) > 9), "")
     return {"name": name, "email": email, "phone": phone, "raw": text}
-
-
-async def ask_llm(prompt: str) -> str:
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(LLM_API, json={
-            "model": LLM_MODEL,
+Update ask_llm:
+Python
+async def ask_llm(prompt: str, model: str = "gemma3", api: str = "http://localhost:11434/api/generate", timeout: int = 120) -> str:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(api, json={
+            "model": model,
             "prompt": prompt,
             "stream": False,
         })
         return r.json().get("response", "").strip()
-
-
-async def parse_job(page):
-    title = await page.evaluate("() => document.querySelector('h1')?.innerText || ''")
-    company = await page.evaluate("""
-        () => {
-            const el = document.querySelector(
-                '[class*="company"], [class*="employer"], meta[property="og:site_name"]'
-            );
-            return el?.content || el?.innerText || '';
-        }
-    """)
-    description = await page.evaluate("""
-        () => {
-            const el = document.querySelector(
-                '[class*="description"], [class*="job-description"], #jobDescriptionText'
-            );
-            return el?.innerText?.substring(0, 3000) || document.body.innerText.substring(0, 3000);
-        }
-    """)
-    return {
-        "title": title.strip(),
-        "company": company.strip(),
-        "description": description.strip(),
-    }
-
-
-async def generate_answers(job, profile):
+Update generate_answers:
+Python
+async def generate_answers(job, profile, config):
     prompt = f"""You are {profile['name']}. Write a brief, professional cover letter for this job:
-
-Company: {job['company']}
-Role: {job['title']}
-Description: {job['description'][:1500]}
-
+...
 Your profile:
 {profile['raw'][:1000]}
-
+...
 Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience."""
 
-    cover_letter = await ask_llm(prompt)
-
-    return {
-        "first_name": profile["name"].split()[0],
-        "last_name": profile["name"].split()[-1] if len(profile["name"].split()) > 1 else "",
-        "email": profile["email"],
-        "phone": profile["phone"],
-        "cover_letter": cover_letter,
-        "resume": "resume.pdf",
-    }
-
-
-async def fill_form(page, answers):
-    fields = await page.query_selector_all(
-        "input:not([type='hidden']):not([type='submit']), textarea, select"
+    cover_letter = await ask_llm(
+        prompt,
+        model=config.llm_model,
+        api=config.llm_api,
+        timeout=config.llm_timeout,
     )
-
-    filled = 0
-    for field in fields:
-        try:
-            tag = await field.evaluate("el => el.tagName.toLowerCase()")
-            input_type = await field.evaluate("el => el.type?.toLowerCase() || 'text'")
-            name = await field.evaluate("el => el.name || ''")
-            id_val = await field.evaluate("el => el.id || ''")
-            placeholder = await field.evaluate("el => el.placeholder || ''")
-
-            label = await field.evaluate("""
-                el => {
-                    const forLabel = document.querySelector(`label[for="${el.id}"]`);
-                    if (forLabel) return forLabel.innerText;
-                    const parentLabel = el.closest('label');
-                    if (parentLabel) return parentLabel.innerText;
-                    return el.getAttribute('aria-label') || '';
-                }
-            """)
-
-            combined = f"{label} {placeholder} {name} {id_val}".lower()
-            value = None
-
-            if any(k in combined for k in ["first name", "given name", "fname"]):
-                value = answers.get("first_name", "")
-            elif any(k in combined for k in ["last name", "surname", "lname"]):
-                value = answers.get("last_name", "")
-            elif "email" in combined:
-                value = answers.get("email", "")
-            elif any(k in combined for k in ["phone", "mobile", "cell"]):
-                value = answers.get("phone", "")
-            elif any(k in combined for k in ["cover letter", "additional", "message"]):
-                value = answers.get("cover_letter", "")
-            elif any(k in combined for k in ["resume", "cv", "upload"]):
-                if input_type == "file":
-                    resume_path = answers.get("resume")
-                    if resume_path and Path(resume_path).exists():
-                        await field.set_input_files(resume_path)
-                        filled += 1
-                continue
-            elif tag == "select":
-                options = await field.query_selector_all("option")
-                for opt in options:
-                    opt_text = await opt.inner_text()
-                    if any(k in opt_text.lower() for k in ["yes", "confirm", "agree", "submit"]):
-                        await field.select_option(label=opt_text.strip())
-                        filled += 1
-                        break
-                continue
-
-            if value:
-                await field.fill(value)
-                filled += 1
-
-        except Exception as e:
-            print(f"  Skip field: {e}")
-            continue
-
-    print(f"Filled {filled} fields")
-    return filled
-
-
-async def apply_to_job(context, url, profile):
-    print(f"\n{'='*60}")
-    print(f"Applying to: {url}")
-    print(f"{'='*60}")
-
-    page = await context.new_page()
-
-    try:
-        # Use domcontentloaded + longer timeout; LinkedIn auth walls often block networkidle
-        await page.goto(url, wait_until="domcontentloaded", timeout=45000)
-
-        job = await parse_job(page)
-        print(f"Job: {job['title']} at {job['company']}")
-
-        print("Generating answers...")
-        answers = await generate_answers(job, profile)
-
-        apply_selectors = [
-            "button:has-text('Apply')",
-            "button:has-text('Apply Now')",
-            "a:has-text('Apply')",
-            "[data-testid*='apply']",
-            "input[type='submit'][value*='Apply']",
-        ]
-
-        apply_clicked = False
-        for sel in apply_selectors:
-            try:
-                btn = await page.query_selector(sel)
-                if btn and await btn.is_visible():
-                    await btn.click()
-                    apply_clicked = True
-                    print("Clicked Apply button")
-                    await asyncio.sleep(2)
-                    break
-            except Exception:
-                continue
-
-        if not apply_clicked:
-            print("No apply button found — may already be on application form")
-
-        print("Filling form...")
-        await fill_form(page, answers)
-
-        screenshot_path = f"screenshots/{uuid4().hex[:8]}.png"
-        Path("screenshots").mkdir(exist_ok=True)
-        await page.screenshot(path=screenshot_path, full_page=True)
-        print(f"Screenshot saved: {screenshot_path}")
-
-        print("\n" + "="*60)
-        print("FORM FILLED — REVIEW BEFORE SUBMITTING")
-        print("="*60)
-        input("Press Enter AFTER you review and submit (or Ctrl+C to skip)... ")
-
-        print("Done with this job.\n")
-
-    except Exception as e:
-        print(f"ERROR: {e}")
-        try:
-            if not page.is_closed():
-                err_path = f"screenshots/error_{uuid4().hex[:8]}.png"
-                Path("screenshots").mkdir(exist_ok=True)
-                await page.screenshot(path=err_path, full_page=True)
-                print(f"Error screenshot saved: {err_path}")
-        except Exception as screenshot_err:
-            print(f"Could not take error screenshot: {screenshot_err}")
-    finally:
-        if not page.is_closed():
-            await page.close()
-
-
-def main():
-    if len(sys.argv) < 2:
-        print("Usage: uv run python apply.py <job_url_file_or_url>")
-        print("\nExample:")
-        print('  uv run python apply.py "https://boards.greenhouse.io/company/jobs/123"')
-        print("\nOr create a file with one URL per line:")
-        print("  uv run python apply.py jobs.txt")
+    # ... rest unchanged
+Update main():
+Python
+    config = load_config()
+    if not Path(config.resume_path).exists():
+        print(f"ERROR: Create {config.resume_path} with your profile first!")
         sys.exit(1)
 
-    arg = sys.argv[1]
-
-    path = Path(arg)
-    if not path.exists():
-        path = Path("output") / arg
-    if path.exists():
-        urls = [line.strip() for line in path.read_text().split("\n") if line.strip()]
-    else:
-        urls = [arg]
-
-    profile = load_profile()
+    profile = load_profile(config.resume_path)
     print(f"Loaded profile for: {profile['name']}")
-
-    async def run():
-        async with async_playwright() as p:
-            # Persistent context keeps cookies, localStorage and login sessions on disk
-            context = await p.chromium.launch_persistent_context(
-                user_data_dir="./browser_data",
-                headless=False,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-                user_agent=(
-                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1440, "height": 900},
-                locale="en-US",
-                timezone_id="America/New_York",
-            )
-
-            # Mask navigator.webdriver, plugins, chrome.runtime, etc.
-            await context.add_init_script(STEALTH_SCRIPT)
-
-            for url in urls:
-                await apply_to_job(context, url, profile)
-
-            await context.close()
-        print("\nAll done!")
-
-    asyncio.run(run())
 How to use it
-Delete any old ./browser_data folder if it exists from a previous failed login.
-Run the script. A real Chrome window will open.
-When LinkedIn (or any site) asks you to log in, log in manually with email/password (avoid "Sign in with Google" if possible — Google is extra aggressive about automation detection).
-Once you are logged in and can see your LinkedIn feed, close the browser window.
-From now on, every time you run apply.py, it will reuse ./browser_data and you will already be authenticated.
-Why this works
-| Detection signal                    | How the fix counters it                                    |
-| ----------------------------------- | ---------------------------------------------------------- |
-| `navigator.webdriver = true`        | `STEALTH_SCRIPT` overrides it to `undefined`               |
-| `--enable-automation` flag          | `--disable-blink-features=AutomationControlled` removes it |
-| Generic headless user agent         | Hardcoded real Chrome macOS user agent                     |
-| Missing plugins / `chrome.runtime`  | `STEALTH_SCRIPT` fakes them                                |
-| Cookies lost every run              | `launch_persistent_context` saves them to `./browser_data` |
-| `networkidle` timeout on auth walls | Changed to `domcontentloaded` with 45 s timeout            |
-
-If Google Sign-In still blocks you
-Some sites force Google OAuth. If LinkedIn keeps showing the "not secure" error even after the stealth changes:
-Use email/password login on LinkedIn instead of Google.
-Or, log in to LinkedIn on your normal Chrome browser, export cookies with an extension like EditThisCookie, and load them via Playwright's storage_state. But the persistent-context method above is usually enough.
-The screenshot crash (Target page, context or browser has been closed) is also fixed — the error handler now checks page.is_closed() before trying to screenshot.
+First run — creates config.json automatically:
+bash
+uv run python -m src.cli
+Edit config.json with your real preferences (e.g., set min_salary_lakhs to 15, hours_since_posted to 4, add company slugs to greenhouse_boards).
+From then on, just run:
+bash
+uv run python -m src.cli
+Override one thing for a single run (e.g., test with last 2 hours only):
+bash
+uv run python -m src.cli --hours 2 --startup
+Use a different config file:
+bash
+uv run python -m src.cli --config ~/job-bot-config.json
+That’s it. config.json is now the single source of truth. CLI flags are only for temporary overrides.

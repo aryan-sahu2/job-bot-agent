@@ -6,7 +6,7 @@ from playwright.async_api import async_playwright
 
 from src.config import SearchConfig
 from src.llm import evaluate_job
-from src.models import JobListing
+from src.models import JobListing, parse_relative_time
 from src.sources.greenhouse import GreenhouseSource
 from src.sources.indeed import IndeedSource
 from src.sources.lever import LeverSource
@@ -112,6 +112,30 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
             seen.add(j.url)
             unique.append(j)
     print(f"Unique after dedup: {len(unique)}")
+
+    from datetime import datetime, timedelta
+
+    if config.hours_since_posted:
+        cutoff = datetime.now() - timedelta(hours=config.hours_since_posted)
+        recent = []
+        for job in unique:
+            posted = parse_relative_time(job.posted_date or "")
+            if posted and posted >= cutoff:
+                recent.append(job)
+            elif not job.posted_date:
+                recent.append(job)
+        unique = recent
+        print(f"Jobs posted within last {config.hours_since_posted}h: {len(unique)}")
+
+    if config.startup_only:
+        startup_kw = ["startup", "early stage", "seed", "series a", "founding", "angel"]
+        filtered = []
+        for job in unique:
+            text = f"{job.title} {job.company} {job.description}".lower()
+            if any(k in text for k in startup_kw) or job.source == "wellfound":
+                filtered.append(job)
+        unique = filtered
+        print(f"Startup jobs: {len(unique)}")
 
     print("\nEvaluating jobs...")
     evaluated = []
