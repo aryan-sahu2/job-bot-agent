@@ -6,6 +6,7 @@ import logging
 import time
 from typing import Any
 
+from src.browser.engine import BrowserEngine
 from src.config.loader import Config
 from src.llm.engine import LLMEngine
 from src.profile.manager import ProfileManager
@@ -22,13 +23,17 @@ logger = logging.getLogger(__name__)
 
 
 class ScreenWorkflow:
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, browser: BrowserEngine | None = None) -> None:
         self._config = config
         self._state = WorkflowState.IDLE
         self._current_job: ScreenJob | None = None
         self._current_context: dict[str, Any] = {}
 
-        self._reader = ScreenReader()
+        if browser:
+            self._reader = ScreenReader(browser=browser)
+        else:
+            self._reader = ScreenReader()
+
         self._parser = JobDescriptionParser(self._reader)
         self._button_finder = ApplyButtonFinder(self._reader)
         self._form_detector = FormDetector(self._reader)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from src.browser.engine import BrowserEngine
+
 logger = logging.getLogger(__name__)
 
 
@@ -15,13 +17,22 @@ class ScreenReaderError(Exception):
 class ScreenReader:
     """Reads the current browser page via CDP connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, browser: BrowserEngine | None = None) -> None:
+        self._browser_engine = browser  # Use shared BrowserEngine
         self._playwright = None
         self._browser = None
+        self._context = None
         self._page = None
 
     async def connect(self, endpoint_url: str = "http://localhost:9222") -> None:
         """Connect to a running browser via CDP."""
+        # If we have a shared BrowserEngine with a page, use it
+        if self._browser_engine and self._browser_engine._page:
+            self._page = self._browser_engine._page
+            logger.info("Using shared browser page: %s", self._page.url)
+            return
+        # Otherwise connect via CDP
+
         from playwright.async_api import async_playwright
 
         if self._browser is not None:

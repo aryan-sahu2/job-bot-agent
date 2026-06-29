@@ -341,3 +341,27 @@ class BrowserEngine:
         if self._page is None:
             raise BrowserError("Browser not started. Call start() first.")
         return self._page
+
+    async def connect_over_cdp(self, endpoint_url: str = "http://localhost:9222") -> None:
+        """Connect to an existing browser via Chrome DevTools Protocol."""
+        try:
+            self._playwright = await async_playwright().start()
+            self._browser = await self._playwright.chromium.connect_over_cdp(endpoint_url)
+
+            # Get the first context and page
+            contexts = self._browser.contexts
+            if contexts:
+                self._context = contexts[0]
+            else:
+                self._context = await self._browser.new_context()
+
+            pages = self._context.pages
+            if pages:
+                self._page = pages[0]
+            else:
+                self._page = await self._context.new_page()
+
+            logger.info("Connected to browser via CDP at %s", endpoint_url)
+
+        except Exception as e:
+            raise BrowserError(f"Failed to connect over CDP: {e}") from e

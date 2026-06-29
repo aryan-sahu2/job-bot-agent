@@ -60,11 +60,9 @@ class GlobalHotkeyListener:
     def _on_activate(self) -> None:
         """Called when the hotkey combination is detected."""
         logger.info("Hotkey triggered: %s", self._hotkey_combo)
-        loop = self._loop or asyncio.get_event_loop()
-        if loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._callback(), loop)
-        else:
-            loop.run_until_complete(self._callback())
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        asyncio.run_coroutine_threadsafe(self._callback(), self._loop)
 
     def start(self) -> None:
         """Start listening for the global hotkey."""
