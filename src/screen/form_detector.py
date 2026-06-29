@@ -1,4 +1,4 @@
-"""Form field detection via accessibility APIs."""
+"""DOM-based form field detector."""
 
 from __future__ import annotations
 
@@ -10,48 +10,14 @@ from src.screen.reader import ScreenReader
 
 logger = logging.getLogger(__name__)
 
-# Mapping of field roles to our FieldType enum
-ROLE_FIELD_MAP = {
-    "AXTextField": FieldType.TEXT,
-    "AXTextArea": FieldType.TEXTAREA,
-    "AXComboBox": FieldType.SELECT,
-    "AXPopUpButton": FieldType.SELECT,
-    "AXCheckBox": FieldType.CHECKBOX,
-    "AXRadioButton": FieldType.RADIO,
-    "AXSlider": FieldType.TEXT,
-    "AXSecureTextField": FieldType.TEXT,
-    "AXSearchField": FieldType.TEXT,
-    "AXDateField": FieldType.DATE,
-    "AXDisclosureTriangle": FieldType.SELECT,
-    "AXMenuButton": FieldType.SELECT,
-    "AXIncrementor": FieldType.TEXT,
-    "AXTabGroup": FieldType.SELECT,
-    "AXOutline": FieldType.SELECT,
-    "AXSplitGroup": FieldType.TEXT,
-    "AXValueIndicator": FieldType.TEXT,
-    "AXLevelIndicator": FieldType.TEXT,
-    "AXRatingIndicator": FieldType.TEXT,
-    "AXRelevanceIndicator": FieldType.TEXT,
-}
-
-# Keywords for detecting field types from labels/titles
-FIELD_TYPE_KEYWORDS = {
-    FieldType.EMAIL: ["email", "e-mail", "mail"],
-    FieldType.PHONE: ["phone", "mobile", "telephone", "cell", "fax"],
-    FieldType.NAME: ["name", "first name", "last name", "full name", "your name"],
-    FieldType.URL: ["url", "link", "website", "portfolio", "github", "linkedin"],
-    FieldType.DATE: ["date", "birth", "birthday", "start date", "available"],
-    FieldType.FILE: ["upload", "resume", "cv", "cover letter", "attachment", "file"],
-}
-
-# Keywords for identifying which standard field a custom field maps to
-STANDARD_FIELD_PATTERNS = {
-    "first_name": ["first name", "given name", "fname"],
-    "last_name": ["last name", "surname", "family name", "lname"],
-    "email": ["email", "e-mail", "email address"],
-    "phone": ["phone", "telephone", "mobile", "phone number", "contact number"],
-    "resume": ["resume", "cv", "upload resume", "upload cv"],
-    "cover_letter": ["cover letter", "cover letter (optional)", "additional info"],
+# Standard field mappings
+STANDARD_FIELDS = {
+    "first_name": ["first name", "given name", "fname", "first"],
+    "last_name": ["last name", "surname", "family name", "lname", "last"],
+    "email": ["email", "e-mail", "email address", "your email"],
+    "phone": ["phone", "telephone", "mobile", "cell", "phone number", "contact number"],
+    "resume": ["resume", "cv", "upload resume", "upload cv", "attach resume"],
+    "cover_letter": ["cover letter", "coverletter", "additional info", "message", "why you"],
     "linkedin": ["linkedin", "linkedin url", "linkedin profile"],
     "github": ["github", "github url", "github profile"],
     "website": ["website", "portfolio", "personal website", "url"],
@@ -61,195 +27,192 @@ STANDARD_FIELD_PATTERNS = {
 
 
 class FormDetector:
-    """Detects form fields in the current window using accessibility APIs.
-
-    Scans the accessibility tree for input fields, text areas, dropdowns,
-    and other form elements. Maps them to standard field types.
-    """
-
     def __init__(self, reader: ScreenReader) -> None:
-        """Initialize the form detector.
-
-        Args:
-            reader: The ScreenReader instance for accessing the UI.
-        """
         self._reader = reader
 
-    def detect_fields(
-        self,
-        window_element: Any | None = None,
-    ) -> list[DetectedField]:
-        """Detect all form fields in the current window.
+    async def detect_fields(self) -> list[DetectedField]:
+        """Detect all form fields in the current page DOM."""
+        page = await self._reader.get_page()
 
-        Args:
-            window_element: The window to scan. If None, uses focused window.
-
-        Returns:
-            List of DetectedField instances.
-        """
-        if window_element is None:
-            window_element = self._reader.get_focused_window()
-
-        if window_element is None:
-            logger.warning("No focused window found")
-            return []
+        # Query all input-like elements
+        elements = await page.query_selector_all(
+            "input:not([type='hidden']), textarea, select, "
+            "[contenteditable='true'], [role='textbox'], [role='combobox']"
+        )
 
         fields: list[DetectedField] = []
-        self._search_for_fields(window_element, fields, depth=0, max_depth=15)
+        for el in elements:
+            field = await self._analyze_element(el)
+            if field:
+                fields.append(field)
+
         logger.info("Detected %d form field(s)", len(fields))
         return fields
 
-    def _search_for_fields(
-        self,
-        element: Any,
-        results: list[DetectedField],
-        depth: int,
-        max_depth: int,
-    ) -> None:
-        """Recursively search for form fields in the accessibility tree."""
-        if depth > max_depth:
-            return
-
+    async def _analyze_element(self, element: Any) -> DetectedField | None:
         try:
-            role = self._reader.get_attribute(element, "AXRole")
+            tag = await element.evaluate("el => el.tagName.toLowerCase()")
+            input_type = await element.evaluate("el => el.type?.toLowerCase() || ''")
+            name = await element.evaluate("el => el.name || ''")
+            id_val = await element.evaluate("el => el.id || ''")
+            placeholder = await element.evaluate("el => el.placeholder || ''")
+            required = await element.evaluate("el => el.required || false")
+            aria_label = await element.evaluate("el => el.getAttribute('aria-label') || ''")
 
-            if role in ROLE_FIELD_MAP:
-                field = self._create_detected_field(element, role)
-                if field:
-                    results.append(field)
-                    logger.debug(
-                        "Detected field: type='%s', title='%s'",
-                        field.field_type,
-                        field.title,
-                    )
+            # Build label text
+            label_text = await self._find_label(element, id_val)
+            combined_text = f"{label_text} {placeholder} {aria_label} {name} {id_val}".lower()
 
-            children = self._reader.get_children(element)
-            for child in children:
-                self._search_for_fields(child, results, depth + 1, max_depth)
-        except Exception:
-            logger.debug("Error searching element at depth %d", depth)
+            # Determine field type
+            field_type = self._determine_type(tag, input_type, combined_text)
 
-    def _find_label_for_element(self, element: Any) -> str:
-        """Find a descriptive label for a form field from the accessibility tree.
-
-        Web form inputs often lack AXTitle/AXDescription. This method checks
-        in order: AXDescription, AXPlaceholderValue, preceding AXStaticText
-        sibling, ancestor group titles, and AXIdentifier.
-        """
-        placeholder = self._reader.get_attribute(element, "AXPlaceholderValue")
-        if placeholder and str(placeholder).strip():
-            return str(placeholder).strip()
-
-        parent = self._reader.get_parent(element)
-        if parent:
-            children = self._reader.get_children(parent)
-            field_index = None
-            for i, child in enumerate(children):
-                if child == element:
-                    field_index = i
-                    break
-
-            if field_index is not None:
-                for j in range(field_index - 1, -1, -1):
-                    prev = children[j]
-                    role = self._reader.get_attribute(prev, "AXRole")
-                    if role == "AXStaticText":
-                        val = self._reader.get_attribute(prev, "AXValue")
-                        if val and str(val).strip():
-                            return str(val).strip()
-
-                    prev_title = self._reader.get_attribute(prev, "AXTitle")
-                    if prev_title and str(prev_title).strip():
-                        return str(prev_title).strip()
-
-            parent_title = self._reader.get_attribute(parent, "AXTitle")
-            if parent_title and str(parent_title).strip():
-                return str(parent_title).strip()
-
-            current = parent
-            for _ in range(5):
-                ancestor = self._reader.get_parent(current)
-                if ancestor is None:
-                    break
-                role = self._reader.get_attribute(ancestor, "AXRole")
-                if role in ("AXGroup", "AXSection", "AXSplitGroup", "AXTabGroup"):
-                    ancestor_title = self._reader.get_attribute(ancestor, "AXTitle")
-                    if ancestor_title and str(ancestor_title).strip():
-                        return str(ancestor_title).strip()
-                current = ancestor
-
-        return ""
-
-    def _create_detected_field(self, element: Any, role: str) -> DetectedField | None:
-        """Create a DetectedField from an accessibility element."""
-        try:
-            title = str(self._reader.get_attribute(element, "AXTitle") or "")
-            description = str(self._reader.get_attribute(element, "AXDescription") or "")
-            value = str(self._reader.get_attribute(element, "AXValue") or "")
-            identifier = str(self._reader.get_attribute(element, "AXIdentifier") or "")
-            required = bool(self._reader.get_attribute(element, "AXRequired"))
-
-            if not title.strip() and not description.strip():
-                found_label = self._find_label_for_element(element)
-                if found_label:
-                    title = found_label
-
-            label_text = f"{title} {description} {identifier}".lower()
-
-            field_type = ROLE_FIELD_MAP.get(role, FieldType.UNKNOWN)
-
-            if field_type == FieldType.TEXT:
-                detected_type = self._detect_text_field_type(label_text, value)
-                if detected_type:
-                    field_type = detected_type
+            # Get selector for filling
+            selector = await self._build_selector(element, id_val, name)
 
             return DetectedField(
-                role=role,
-                title=title,
-                description=description,
-                value=value,
-                identifier=identifier,
+                role=tag,
+                title=label_text or placeholder or aria_label or name or id_val,
+                description=placeholder or aria_label,
+                value="",
+                identifier=selector,
                 field_type=field_type,
                 element_ref=element,
                 required=required,
             )
-        except Exception:
-            logger.exception("Error creating DetectedField")
+        except Exception as e:
+            logger.debug("Failed to analyze element: %s", e)
             return None
 
-    def _detect_text_field_type(self, label_text: str, current_value: str) -> FieldType | None:
-        """Detect the specific type of a text field from its label."""
-        for field_type, keywords in FIELD_TYPE_KEYWORDS.items():
+    async def _find_label(self, element: Any, element_id: str) -> str:
+        """Find label text for an element."""
+        # Try aria-labelledby
+        labelled_by = await element.evaluate("el => el.getAttribute('aria-labelledby') || ''")
+        if labelled_by:
+            page = await self._reader.get_page()
+            label_el = await page.query_selector(f"#{labelled_by}")
+            if label_el:
+                text = await label_el.inner_text()
+                return text.strip() if text else ""
+
+        # Try label[for=id]
+        if element_id:
+            page = await self._reader.get_page()
+            label_el = await page.query_selector(f"label[for='{element_id}']")
+            if label_el:
+                text = await label_el.inner_text()
+                return text.strip() if text else ""
+
+        # Try parent label
+        label_text = await element.evaluate(
+            "el => el.closest('label')?.textContent?.trim() || ''"
+        )
+        if label_text:
+            return label_text
+
+        # Try preceding sibling text
+        prev_text = await element.evaluate("""
+            el => {
+                let prev = el.previousElementSibling;
+                while (prev) {
+                    if (prev.textContent?.trim()) return prev.textContent.trim();
+                    prev = prev.previousElementSibling;
+                }
+                return '';
+            }
+        """)
+        return prev_text
+
+    def _determine_type(self, tag: str, input_type: str, label_text: str) -> FieldType:
+        # Check label keywords first
+        for field_name, keywords in STANDARD_FIELDS.items():
             if any(kw in label_text for kw in keywords):
-                return field_type
-        return None
+                if field_name == "email":
+                    return FieldType.EMAIL
+                elif field_name == "phone":
+                    return FieldType.PHONE
+                elif field_name == "resume":
+                    return FieldType.FILE
+                elif field_name == "cover_letter":
+                    return FieldType.TEXTAREA
+                elif field_name == "linkedin" or field_name == "github" or field_name == "website":
+                    return FieldType.URL
+
+        # Check input type
+        if tag == "select":
+            return FieldType.SELECT
+        elif tag == "textarea":
+            return FieldType.TEXTAREA
+        elif input_type == "checkbox":
+            return FieldType.CHECKBOX
+        elif input_type == "radio":
+            return FieldType.RADIO
+        elif input_type == "file":
+            return FieldType.FILE
+        elif input_type == "email":
+            return FieldType.EMAIL
+        elif input_type == "tel":
+            return FieldType.PHONE
+        elif input_type == "url":
+            return FieldType.URL
+        elif input_type in ("date", "datetime-local"):
+            return FieldType.DATE
+        elif input_type in ("number", "text", "search", "password"):
+            # Check label for clues
+            if any(k in label_text for k in ["name", "first", "last", "full"]):
+                return FieldType.NAME
+            return FieldType.TEXT
+
+        return FieldType.TEXT
+
+    async def _build_selector(self, element: Any, id_val: str, name: str) -> str:
+        """Build a robust CSS selector for the element."""
+        if id_val:
+            return f"#{id_val}"
+        if name:
+            return f"[name='{name}']"
+        # Fallback: generate xpath or nth-child (less robust)
+        return await element.evaluate("""
+            el => {
+                const path = [];
+                let curr = el;
+                while (curr && curr.tagName !== 'BODY') {
+                    let selector = curr.tagName.toLowerCase();
+                    if (curr.id) {
+                        selector += '#' + curr.id;
+                        path.unshift(selector);
+                        break;
+                    }
+                    if (curr.className) {
+                        selector += '.' + curr.className.split(' ').join('.');
+                    }
+                    const siblings = Array.from(curr.parentNode?.children || []);
+                    const sameTag = siblings.filter(s => s.tagName === curr.tagName);
+                    if (sameTag.length > 1) {
+                        const index = sameTag.indexOf(curr) + 1;
+                        selector += `:nth-of-type(${index})`;
+                    }
+                    path.unshift(selector);
+                    curr = curr.parentNode;
+                }
+                return path.join(' > ');
+            }
+        """)
 
     def map_to_standard_field(self, field: DetectedField) -> str | None:
-        """Map a detected field to a standard field name.
-
-        Returns:
-            Standard field name (e.g., "first_name", "email") or None if custom.
-        """
         label_text = f"{field.title} {field.description} {field.identifier}".lower()
-
-        for standard_name, patterns in STANDARD_FIELD_PATTERNS.items():
+        for standard_name, patterns in STANDARD_FIELDS.items():
             if any(pat in label_text for pat in patterns):
                 return standard_name
-
         return None
 
     def is_upload_field(self, field: DetectedField) -> bool:
-        """Check if a field is a file upload field."""
         return field.field_type == FieldType.FILE
 
     def is_dropdown_field(self, field: DetectedField) -> bool:
-        """Check if a field is a dropdown/select field."""
         return field.field_type == FieldType.SELECT
 
     def get_required_fields(self, fields: list[DetectedField]) -> list[DetectedField]:
-        """Filter fields to only required ones."""
         return [f for f in fields if f.required]
 
     def get_optional_fields(self, fields: list[DetectedField]) -> list[DetectedField]:
-        """Filter fields to only optional ones."""
         return [f for f in fields if not f.required]
