@@ -111,11 +111,13 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
 
 def save_results(jobs: list[JobListing], prefix: str = ""):
     ts = datetime.now().strftime("%Y%m%d_%H%M")
-    json_file = f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json"
-    txt_file = f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt"
+    out_dir = Path("output")
+    out_dir.mkdir(exist_ok=True)
+    json_file = out_dir / (f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json")
+    txt_file = out_dir / (f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt")
 
-    Path(json_file).write_text(json.dumps([j.to_dict() for j in jobs], indent=2))
-    Path(txt_file).write_text("\n".join(j.url for j in jobs))
+    json_file.write_text(json.dumps([j.to_dict() for j in jobs], indent=2))
+    txt_file.write_text("\n".join(j.url for j in jobs))
 
     print(f"\nSaved {len(jobs)} jobs:")
     print(f"  JSON: {json_file}")

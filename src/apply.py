@@ -226,8 +226,11 @@ def main():
 
     arg = sys.argv[1]
 
-    if Path(arg).exists():
-        urls = [line.strip() for line in Path(arg).read_text().split("\n") if line.strip()]
+    path = Path(arg)
+    if not path.exists():
+        path = Path("output") / arg
+    if path.exists():
+        urls = [line.strip() for line in path.read_text().split("\n") if line.strip()]
     else:
         urls = [arg]
 

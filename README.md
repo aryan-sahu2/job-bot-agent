@@ -4,7 +4,7 @@ Two scripts that replace complex automation with simple, practical workflows.
 
 ## Scripts
 
-- **`aggregator.py`** — Searches LinkedIn, Greenhouse, Lever, Wellfound for jobs matching your config. Scores relevance with local LLM (Ollama). Outputs `jobs_found.json` and `jobs_to_apply.txt`.
+- **`aggregator.py`** — Searches LinkedIn, Greenhouse, Lever, Wellfound for jobs matching your config. Scores relevance with local LLM (Ollama). Outputs to `output/` dir.
 - **`apply.py`** — Opens each job URL in a visible browser, parses the posting, generates a cover letter via Ollama, fills form fields automatically, saves a screenshot, and **pauses for your review** before submission.
 
 ## Quick Start
@@ -22,9 +22,9 @@ ollama serve
 # 3. Find jobs
 uv run python aggregator.py
 
-# 4. Review jobs_found.json, edit jobs_to_apply.txt
+# 4. Review output/jobs_found_*.json, edit output/jobs_to_apply_*.txt
 # 5. Apply (opens browser, you review before submit)
-uv run python apply.py jobs_to_apply.txt
+uv run python apply.py output/jobs_to_apply_*.txt
 ```
 
 ## Why This Works

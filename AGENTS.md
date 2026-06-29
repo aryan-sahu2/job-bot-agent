@@ -9,7 +9,7 @@ Two scripts that replace the old complex architecture. Simple, practical, and hu
 ### `aggregator.py`
 - Searches LinkedIn, Greenhouse, Lever, Wellfound for jobs matching your config
 - Scores relevance using a local LLM (Ollama)
-- Outputs `jobs_found.json` (full data) and `jobs_to_apply.txt` (URLs for apply.py)
+- Outputs `output/jobs_found_*.json` (full data) and `output/jobs_to_apply_*.txt` (URLs for apply.py)
 
 ### `apply.py`
 - Opens each job URL in a visible browser
@@ -27,9 +27,9 @@ Two scripts that replace the old complex architecture. Simple, practical, and hu
 # 3. Find jobs
 uv run python aggregator.py
 
-# 4. Review jobs_found.json, edit jobs_to_apply.txt
+# 4. Review output/jobs_found_*.json, edit output/jobs_to_apply_*.txt
 # 5. Apply
-uv run python apply.py jobs_to_apply.txt
+uv run python apply.py output/jobs_to_apply_*.txt
 ```
 
 ## Principles
@@ -53,4 +53,4 @@ ollama serve  # Ensure Ollama is running
 - `resume.txt` — first line is your name, contains email/phone and full profile text
 - `SearchConfig` in `aggregator.py` controls keywords, location, salary threshold
 - Screenshots saved to `screenshots/`
-- Output files: `jobs_found.json`, `jobs_to_apply.txt`
+- Output files: `output/jobs_found_*.json`, `output/jobs_to_apply_*.txt`
