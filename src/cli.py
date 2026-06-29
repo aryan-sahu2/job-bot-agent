@@ -33,8 +33,6 @@ def main():
         "--no-remote", dest="remote", action="store_false",
         default=None, help="Include non-remote",
     )
-    parser.add_argument("--naukri-exp", default=None, help="Naukri experience filter (years)")
-    parser.add_argument("--naukri-ctc", default=None, help="Naukri CTC filter e.g. 20to50")
 
     args = parser.parse_args()
 
@@ -60,10 +58,6 @@ def main():
         config.startup_only = args.startup
     if args.remote is not None:
         config.remote_only = args.remote
-    if args.naukri_exp is not None:
-        config.naukri_experience = args.naukri_exp
-    if args.naukri_ctc is not None:
-        config.naukri_salary_lakhs = args.naukri_ctc
 
     if not Path(config.resume_path).exists():
         print(f"ERROR: Create {config.resume_path} with your profile first!")

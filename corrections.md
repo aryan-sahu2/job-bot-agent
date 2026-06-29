@@ -1,849 +1,941 @@
-The root cause is a cascade of failures:
-LinkedIn found 10 jobs but your 4-hour time filter killed them. LinkedIn returns datetime="2026-06-29" (date-only). Your parser turns that into 2026-06-29 00:00:00, which is >4 hours ago, so they’re discarded. Meanwhile, Wellfound returned 49 random jobs (Sales Rep, Video Editor, etc.) because its Apollo cache contains all jobs on the page, not just the role you searched for.
-Indeed / Naukri / RemoteOK / WeWorkRemotely all returned 0 because of bot blocks, bad selectors, or overly aggressive keyword filtering.
-Scoring gives 0 to irrelevant Wellfound jobs, so only 1 survives.
-Here are the surgical fixes. Replace the files below:
-1. src/models.py — Stop treating date-only strings as midnight
-Date-only strings (2026-06-29) should mean “unknown time”, not “midnight”.
+Here is how (browser assistant) fits into your existing codebase. It replaces the brittle Playwright automation with a local API server + a Tampermonkey userscript that runs inside your real browser. You manually click a job URL, the userscript detects the application form, and fills it from your local profile in one click.
+How it works
+src/server.py — a tiny local FastAPI server on localhost:8765. It reads your resume.txt, serves your latest aggregated jobs, and proxies cover-letter requests to your local Ollama instance.
+jobbot-assistant.user.js — a Tampermonkey userscript that injects a floating “JobBot” panel onto any job application page (Greenhouse, Lever, Workday, Breezy, etc.).
+Workflow:
+Run uv run python src/server.py in one terminal.
+Install the userscript in your browser (Tampermonkey).
+Click any job URL from your generated list.
+Hit Fill Profile → it auto-fills name, email, phone.
+Hit Generate Cover Letter → it scrapes the job description, asks your local LLM for a tailored letter, and pastes it into the form.
+You upload your resume manually (browsers block file-input automation for security) and click Submit.
+What to keep
+Table
+File / Directory	Why
+src/aggregator.py	Still scrapes and scores jobs.
+src/cli.py	Still runs the aggregator.
+src/config.py	Still loads config.
+src/llm.py	Still used by aggregator for scoring; server reuses the same logic.
+src/models.py	Still used everywhere.
+src/sources/*	All sources remain.
+config.json	Add new keys for ATS boards if you want, but existing keys stay.
+resume.txt	Now read by the server on every request.
+pyproject.toml	Keep, but remove playwright and add fastapi + uvicorn.
+What to remove
+Table
+File / Item	Why
+src/apply.py	Delete entirely. Playwright automation is replaced by the browser userscript.
+playwright dependency	Remove from pyproject.toml / uv.lock. No longer needed.
+screenshots/ directory	No longer generated; you can delete old screenshots.
+What to add
+Table
+File	Purpose
+src/server.py	Local API server (profile, jobs, cover-letter proxy).
+jobbot-assistant.user.js	Tampermonkey userscript (place in repo root for reference).
+fastapi, uvicorn	New Python dependencies.
+Dependency update
+bash
+# Remove the old browser automation stack
+uv remove playwright
+
+# Add the local server stack
+uv add fastapi uvicorn
+1. src/server.py (new file)
 Python
-import re
-from dataclasses import dataclass
-from datetime import datetime, timedelta
-from typing import Optional
-
-
-@dataclass
-class JobListing:
-    title: str
-    company: str
-    location: str
-    url: str
-    salary: Optional[str] = None
-    description: str = ""
-    source: str = ""
-    posted_date: Optional[str] = None
-    relevance_score: float = 0.0
-    reason: str = ""
-
-    def to_dict(self):
-        return {
-            "title": self.title,
-            "company": self.company,
-            "location": self.location,
-            "url": self.url,
-            "salary": self.salary,
-            "description": self.description[:500],
-            "source": self.source,
-            "posted_date": self.posted_date,
-            "score": self.relevance_score,
-            "reason": self.reason,
-        }
-
-
-def parse_salary(salary_str: str) -> int | None:
-    if not salary_str:
-        return None
-
-    lpa_match = re.search(
-        r"(\d+(?:\.\d+)?)\s*(?:[-–]\s*\d+(?:\.\d+)?)?\s*LPA",
-        salary_str,
-        re.IGNORECASE,
-    )
-    if lpa_match:
-        return int(float(lpa_match.group(1)) * 100000)
-
-    inr_match = re.search(r"₹?\s*([\d,]+)(?:\s*[-–]\s*₹?\s*[\d,]+)?", salary_str)
-    if inr_match:
-        val = int(inr_match.group(1).replace(",", ""))
-        if val > 10000:
-            return val
-
-    nums = re.findall(r"[\d,]+", salary_str.replace(",", ""))
-    if not nums:
-        return None
-    vals = [int(n) for n in nums if n.isdigit()]
-    if not vals:
-        return None
-    min_val = min(vals)
-    if min_val < 100:
-        min_val *= 1000
-    return min_val
-
-
-def parse_relative_time(time_str: str) -> Optional[datetime]:
-    if not time_str:
-        return None
-
-    s = time_str.strip()
-
-    # Date-only (e.g. 2026-06-29) — treat as unknown time so we keep the job
-    if re.match(r"^\d{4}-\d{2}-\d{2}$", s):
-        return None
-
-    s_lower = s.lower()
-    now = datetime.now()
-
-    try:
-        return datetime.fromisoformat(s.replace("Z", "+00:00").replace("+00:00", ""))
-    except ValueError:
-        pass
-
-    patterns = [
-        (r"(\d+)\s*hour", "hours"),
-        (r"(\d+)\s*hr", "hours"),
-        (r"(\d+)\s*minute", "minutes"),
-        (r"(\d+)\s*min", "minutes"),
-        (r"(\d+)\s*day", "days"),
-        (r"(\d+)\s*week", "weeks"),
-        (r"(\d+)\s*month", "months"),
-    ]
-    for pat, unit in patterns:
-        m = re.search(pat, s_lower)
-        if m:
-            val = int(m.group(1))
-            delta = {
-                "hours": timedelta(hours=val),
-                "minutes": timedelta(minutes=val),
-                "days": timedelta(days=val),
-                "weeks": timedelta(weeks=val),
-                "months": timedelta(days=val * 30),
-            }[unit]
-            return now - delta
-
-    if any(x in s_lower for x in ["just now", "today", "few hours", "just posted"]):
-        return now - timedelta(hours=1)
-
-    return None
-2. src/aggregator.py — Keep jobs when the post time is unknown
-The old code checked elif not job.posted_date (the raw string), but LinkedIn does send a raw string — it just lacks a time component. We now check the parsed result.
-Python
-import asyncio
 import json
-from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.config import SearchConfig
-from src.llm import evaluate_job
-from src.models import JobListing, parse_relative_time
-from src.sources.greenhouse import GreenhouseSource
-from src.sources.indeed import IndeedSource
-from src.sources.lever import LeverSource
-from src.sources.linkedin import LinkedInSource
-from src.sources.naukri import NaukriSource
-from src.sources.remoteok import RemoteOKSource
-from src.sources.wellfound import WellfoundSource
-from src.sources.weworkremotely import WeWorkRemotelySource
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import uvicorn
 
-STEALTH_SCRIPT = """
-Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-Object.defineProperty(navigator, 'languages', {get: () => ['en-US', 'en']});
-window.chrome = { runtime: {} };
+from src.config import load_config
+
+app = FastAPI(title="JobBot Assistant")
+
+# Allow the userscript to call from any job-board domain
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+config = load_config()
+RESUME_PATH = Path(config.resume_path)
+OUTPUT_DIR = Path(config.output_dir)
+
+
+def _latest_jobs_path() -> Path | None:
+    d = OUTPUT_DIR / "jobs_found"
+    if not d.exists():
+        return None
+    files = sorted(d.glob("jobs_found_*.json"), reverse=True)
+    return files[0] if files else None
+
+
+@app.get("/")
+def root():
+    return {"status": "ok"}
+
+
+@app.get("/profile")
+def get_profile():
+    if not RESUME_PATH.exists():
+        return {"error": f"{RESUME_PATH} not found"}
+    raw = RESUME_PATH.read_text()
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    name = lines[0] if lines else "Applicant"
+    email = next((l for l in lines if "@" in l), "")
+    phone = next((l for l in lines if any(c.isdigit() for c in l) and len(l) > 9), "")
+    parts = name.split()
+    return {
+        "name": name,
+        "first_name": parts[0] if parts else "",
+        "last_name": parts[-1] if len(parts) > 1 else "",
+        "email": email,
+        "phone": phone,
+        "raw": raw,
+    }
+
+
+@app.get("/jobs")
+def get_jobs():
+    p = _latest_jobs_path()
+    if not p:
+        return []
+    return json.loads(p.read_text())
+
+
+@app.post("/cover-letter")
+async def cover_letter(payload: dict):
+    profile = payload.get("profile", {})
+    job_title = payload.get("job_title", "")
+    company = payload.get("company", "")
+    description = payload.get("description", "")[:1500]
+
+    prompt = (
+        f"You are {profile.get('name', 'the applicant')}. Write a brief, professional cover letter "
+        f"for this job:\n\nCompany: {company}\nRole: {job_title}\n"
+        f"Description: {description}\n\nYour profile:\n{profile.get('raw', '')[:1000]}\n\n"
+        f"Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience. "
+        f"Do not include addresses or dates. Just the body paragraphs."
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=config.llm_timeout) as client:
+            r = await client.post(
+                config.llm_api,
+                json={"model": config.llm_model, "prompt": prompt, "stream": False},
+            )
+            text = r.json().get("response", "").strip()
+            return {"cover_letter": text}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def main():
+    uvicorn.run("src.server:app", host="127.0.0.1", port=8765, reload=False, log_level="info")
+
+
+if __name__ == "__main__":
+    main()
+2. jobbot-assistant.user.js (new file)
+Save this as jobbot-assistant.user.js in your repo root, then install it via Tampermonkey.
+JavaScript
+// ==UserScript==
+// @name         JobBot Assistant
+// @namespace    jobbot
+// @version      1.0
+// @description  Auto-fill job applications using your local JobBot profile
+// @author       You
+// @match        *://*.greenhouse.io/*
+// @match        *://boards.greenhouse.io/*
+// @match        *://*.lever.co/*
+// @match        *://jobs.lever.co/*
+// @match        *://*.workday.com/*
+// @match        *://*.myworkdayjobs.com/*
+// @match        *://*.breezy.hr/*
+// @match        *://*.recruitee.com/*
+// @match        *://*.workable.com/*
+// @match        *://*.smartrecruiters.com/*
+// @match        *://*.ashbyhq.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const SERVER = 'http://127.0.0.1:8765';
+    let profileCache = null;
+
+    // --- UI Panel ---
+    const panel = document.createElement('div');
+    panel.id = 'jobbot-panel';
+    panel.innerHTML = `
+      <div style="position:fixed;bottom:20px;right:20px;z-index:99999;background:#0f172a;color:#e2e8f0;padding:16px;border-radius:12px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,0.5);width:300px;border:1px solid #334155;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <strong style="font-size:14px;">🤖 JobBot Assistant</strong>
+          <button id="jb-close" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:20px;line-height:1;">×</button>
+        </div>
+        <div id="jb-status" style="font-size:12px;color:#94a3b8;margin-bottom:12px;min-height:18px;">Checking server...</div>
+        <button id="jb-fill" style="width:100%;padding:10px;margin-bottom:8px;background:#10b981;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Fill Profile</button>
+        <button id="jb-cover" style="width:100%;padding:10px;margin-bottom:8px;background:#3b82f6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Generate Cover Letter</button>
+        <button id="jb-jobs" style="width:100%;padding:10px;background:#ef4444;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Open Latest Jobs</button>
+        <div id="jb-extra" style="margin-top:10px;"></div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    const statusEl = document.getElementById('jb-status');
+    const extraEl = document.getElementById('jb-extra');
+
+    function setStatus(msg) {
+        statusEl.textContent = msg;
+    }
+
+    document.getElementById('jb-close').onclick = () => {
+        document.getElementById('jobbot-panel').style.display = 'none';
+    };
+
+    // --- Server health check ---
+    fetch(`${SERVER}/`).then(r => r.json()).then(() => {
+        setStatus('Connected — ready to assist');
+    }).catch(() => {
+        setStatus('⚠️ Server offline. Run: uv run python src/server.py');
+    });
+
+    // --- Field helpers ---
+    function getLabel(el) {
+        if (el.id) {
+            const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+            if (lbl) return lbl.innerText;
+        }
+        const parent = el.closest('label');
+        if (parent) return parent.innerText;
+        const ariaId = el.getAttribute('aria-labelledby');
+        if (ariaId) {
+            const lbl = document.getElementById(ariaId);
+            if (lbl) return lbl.innerText;
+        }
+        return el.getAttribute('aria-label') || '';
+    }
+
+    function findField(keywords) {
+        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select');
+        for (const el of inputs) {
+            const text = `${getLabel(el)} ${el.placeholder || ''} ${el.name || ''} ${el.id || ''}`.toLowerCase();
+            if (keywords.some(k => text.includes(k))) return el;
+        }
+        return null;
+    }
+
+    function setField(el, value) {
+        if (!el) return false;
+        if (el.tagName === 'SELECT') {
+            const opts = Array.from(el.options);
+            const yesOpt = opts.find(o => /yes|agree|confirm|accept/i.test(o.text));
+            if (yesOpt) el.value = yesOpt.value;
+            else if (opts.length > 1) el.value = opts[1].value;
+        } else {
+            el.focus();
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.blur();
+        }
+        return true;
+    }
+
+    // --- Actions ---
+    async function loadProfile() {
+        if (profileCache) return profileCache;
+        const res = await fetch(`${SERVER}/profile`);
+        profileCache = await res.json();
+        if (profileCache.error) throw new Error(profileCache.error);
+        return profileCache;
+    }
+
+    document.getElementById('jb-fill').onclick = async () => {
+        try {
+            setStatus('Loading profile...');
+            const p = await loadProfile();
+            let filled = 0;
+
+            if (setField(findField(['first name', 'given name', 'fname']), p.first_name)) filled++;
+            if (setField(findField(['last name', 'surname', 'lname']), p.last_name)) filled++;
+            if (!filled && setField(findField(['full name', 'name']), p.name)) filled++;
+            if (setField(findField(['email', 'e-mail']), p.email)) filled++;
+            if (setField(findField(['phone', 'mobile', 'cell', 'tel']), p.phone)) filled++;
+
+            setStatus(`Filled ${filled} fields. Resume upload must be done manually.`);
+        } catch (e) {
+            setStatus('Error: ' + e.message);
+        }
+    };
+
+    function extractJobDetails() {
+        const h1 = document.querySelector('h1');
+        const title = h1 ? h1.innerText.trim() : '';
+        let company = '';
+        const og = document.querySelector('meta[property="og:site_name"]');
+        if (og) company = og.content;
+        else {
+            const m = window.location.hostname.match(/^([^\.]+)\./);
+            if (m) company = m[1];
+        }
+        let desc = '';
+        const selectors = [
+            '[class*="description"]', '[class*="job-description"]', '#jobDescriptionText',
+            '[data-testid*="description"]', '.section.page-centered', '[class*="posting"]'
+        ];
+        for (const s of selectors) {
+            const el = document.querySelector(s);
+            if (el) { desc = el.innerText.substring(0, 2000); break; }
+        }
+        return { job_title: title, company, description: desc };
+    }
+
+    document.getElementById('jb-cover').onclick = async () => {
+        try {
+            setStatus('Generating cover letter...');
+            const p = await loadProfile();
+            const job = extractJobDetails();
+            const res = await fetch(`${SERVER}/cover-letter`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ profile: p, ...job })
+            });
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            const el = findField(['cover letter', 'additional', 'message', 'why', 'tell us', 'comments', 'note']);
+            if (el) {
+                setField(el, data.cover_letter);
+                setStatus('Cover letter filled.');
+            } else {
+                extraEl.innerHTML = `<textarea style="width:100%;height:120px;margin-top:8px;font-size:12px;">${data.cover_letter.replace(/</g,'&lt;')}</textarea>`;
+                setStatus('No cover letter field found. Copied above — paste manually.');
+            }
+        } catch (e) {
+            setStatus('Error: ' + e.message);
+        }
+    };
+
+    document.getElementById('jb-jobs').onclick = async () => {
+        try {
+            const res = await fetch(`${SERVER}/jobs`);
+            const jobs = await res.json();
+            if (!jobs.length) {
+                setStatus('No jobs found. Run aggregator first.');
+                return;
+            }
+            const list = jobs.slice(0, 10).map(j =>
+                `<li style="margin-bottom:6px;"><a href="${j.url}" target="_blank" style="color:#60a5fa;">${j.title} @ ${j.company}</a></li>`
+            ).join('');
+            extraEl.innerHTML = `<ul style="padding-left:16px;font-size:12px;max-height:200px;overflow-y:auto;">${list}</ul>`;
+            setStatus(`Showing ${Math.min(jobs.length, 10)} jobs.`);
+        } catch (e) {
+            setStatus('Error loading jobs.');
+        }
+    };
+})();
+How to use it
+Update dependencies
+bash
+uv remove playwright
+uv add fastapi uvicorn
+Delete the old apply bot
+bash
+rm src/apply.py
+rm -rf screenshots/
+Start the local server (leave it running in a terminal tab)
+bash
+uv run python src/server.py
+Install the userscript
+Install the Tampermonkey extension in your browser.
+Click Tampermonkey → “Create a new script”.
+Delete the default template, paste the entire contents of jobbot-assistant.user.js, and save (Ctrl+S).
+Run your workflow
+uv run python src/cli.py (or aggregator.py) to generate jobs as usual.
+Open any job URL from output/jobs_to_apply/*.txt.
+The green JobBot panel appears in the bottom-right.
+Click Fill Profile → Generate Cover Letter → upload resume manually → hit Submit.
+
+
+
+Here is the definitive, production-ready implementation. This replaces the brittle Playwright automation with a local FastAPI server + Tampermonkey userscript that runs inside your real browser.
+What to delete
+bash
+rm src/apply.py
+rm -rf screenshots/
+rm src/sources/naukri.py      # if you still have it
+rm src/sources/remoteok.py    # if you still have it
+rm src/sources/weworkremotely.py  # if you still have it
+Dependency changes
+bash
+uv remove playwright
+uv add fastapi uvicorn
+1. src/server.py — Local API backend
+Create this file. It serves your profile, latest jobs, and proxies cover-letter requests to your local Ollama.
+Python
+"""
+JobBot Assistant Server
+Run: uv run python src/server.py
 """
 
-
-async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
-    print("=" * 60)
-    print("JOB AGGREGATOR")
-    print(f"Keywords: {config.keywords}")
-    print(f"Location: {config.location}")
-    print(f"Min Salary: {config.min_salary or 'Any'}")
-    print(f"Experience: {config.experience_level}")
-    print(f"Exclude: {', '.join(config.exclude_keywords)}")
-    print("=" * 60)
-
-    tasks = [
-        LinkedInSource.scrape(config),
-        IndeedSource.scrape(config),
-        NaukriSource.scrape(config),
-        WellfoundSource.scrape(config),
-        RemoteOKSource.scrape(config),
-        WeWorkRemotelySource.scrape(config),
-    ]
-
-    for board in config.greenhouse_boards:
-        tasks.append(GreenhouseSource.scrape(board, config))
-
-    for slug in config.lever_slugs:
-        tasks.append(LeverSource.scrape(slug, config))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    all_jobs: list[JobListing] = []
-    for result in results:
-        if isinstance(result, list):
-            all_jobs.extend(result)
-        elif isinstance(result, Exception):
-            print(f"Source error: {result}")
-
-    print(f"\nTotal collected: {len(all_jobs)}")
-
-    seen = set()
-    unique = []
-    for j in all_jobs:
-        if j.url not in seen:
-            seen.add(j.url)
-            unique.append(j)
-    print(f"Unique after dedup: {len(unique)}")
-
-    if config.hours_since_posted:
-        cutoff = datetime.now() - timedelta(hours=config.hours_since_posted)
-        recent = []
-        for job in unique:
-            posted = parse_relative_time(job.posted_date or "")
-            # Keep job if posted time is recent OR if we couldn't parse it
-            if posted is None or posted >= cutoff:
-                recent.append(job)
-        unique = recent
-        print(f"Jobs posted within last {config.hours_since_posted}h (or unknown): {len(unique)}")
-
-    if config.startup_only:
-        startup_kw = ["startup", "early stage", "seed", "series a", "founding", "angel"]
-        filtered = []
-        for job in unique:
-            text = f"{job.title} {job.company} {job.description}".lower()
-            if any(k in text for k in startup_kw) or job.source == "wellfound":
-                filtered.append(job)
-        unique = filtered
-        print(f"Startup jobs: {len(unique)}")
-
-    print("\nEvaluating jobs...")
-    evaluated = []
-    for i, job in enumerate(unique):
-        print(f"  [{i+1}/{len(unique)}] {job.title[:50]}... ({job.source})")
-        score, reason, salary = await evaluate_job(job, profile, config)
-        job.relevance_score = score
-        job.reason = reason
-        if salary:
-            job.salary = salary
-
-        if score < 20:
-            print(f"    Skipped (score {score:.0f})")
-            continue
-        combined = f"{job.title} {job.description}".lower()
-        if any(ex.lower() in combined for ex in config.exclude_keywords):
-            print("    Skipped (excluded keyword)")
-            continue
-
-        evaluated.append(job)
-        print(f"    Score {score:.0f}: {reason}")
-
-    evaluated.sort(key=lambda x: x.relevance_score, reverse=True)
-    return evaluated
-
-
-def save_results(jobs: list[JobListing], config: SearchConfig, prefix: str = ""):
-    ts = datetime.now().strftime("%Y%m%d_%H%M")
-
-    json_dir = Path(config.output_dir) / "jobs_found"
-    txt_dir = Path(config.output_dir) / "jobs_to_apply"
-    json_dir.mkdir(parents=True, exist_ok=True)
-    txt_dir.mkdir(parents=True, exist_ok=True)
-
-    json_file = json_dir / (
-        f"jobs_found_{prefix}{ts}.json" if prefix else f"jobs_found_{ts}.json"
-    )
-    txt_file = txt_dir / (
-        f"jobs_to_apply_{prefix}{ts}.txt" if prefix else f"jobs_to_apply_{ts}.txt"
-    )
-
-    json_file.write_text(json.dumps([j.to_dict() for j in jobs], indent=2))
-    txt_file.write_text("\n".join(j.url for j in jobs))
-
-    print(f"\nSaved {len(jobs)} jobs:")
-    print(f"  JSON: {json_file}")
-    print(f"  URLs: {txt_file}")
-3. src/llm.py — Include location in scoring & normalize hyphens
-Your keyword search was missing the location field, so remote jobs that had "Remote" only in the location column got 0 bonus points.
-Python
 import json
-import re
+from pathlib import Path
 
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 import httpx
 
-from src.config import SearchConfig
-from src.models import JobListing, parse_salary
+from src.config import load_config
+
+app = FastAPI(title="JobBot Assistant")
+
+# CORS: userscript calls from arbitrary job-board domains
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+config = load_config()
+RESUME_PATH = Path(config.resume_path)
+OUTPUT_DIR = Path(config.output_dir)
 
 
-async def ask_llm(prompt: str, model: str = "gemma3", timeout: int = 90) -> str:
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            r = await client.post(
-                "http://localhost:11434/api/generate",
-                json={"model": model, "prompt": prompt, "stream": False},
-            )
-            return r.json().get("response", "").strip()
-    except Exception as e:
-        print(f"    LLM request failed: {e}")
-        return ""
+def _latest_jobs_file() -> Path | None:
+    d = OUTPUT_DIR / "jobs_found"
+    if not d.exists():
+        return None
+    files = sorted(d.glob("jobs_found_*.json"), reverse=True)
+    return files[0] if files else None
 
 
-async def evaluate_job(
-    job: JobListing, profile: str, config: SearchConfig
-) -> tuple[float, str, str | None]:
-    title_company = f"{job.title} {job.company}".lower()
-    desc_lower = job.description.lower()
-    # FIX: include location so "Remote" jobs actually get the remote bonus
-    combined = f"{title_company} {desc_lower} {job.location.lower()}"
+@app.get("/")
+def health():
+    return {"status": "ok", "profile": RESUME_PATH.exists()}
 
-    score = 0.0
-    reasons = []
 
-    # FIX: normalize hyphens so "full-stack" matches "full stack"
-    kw_clean = config.keywords.lower().replace("-", " ")
-    keyword_hits = sum(1 for k in kw_clean.split() if k in combined)
-    score += keyword_hits * 10
-
-    level_map = {
-        "entry": ["entry", "junior", "new grad", "graduate", "0-2", "0 - 2", "fresher"],
-        "mid": ["mid", "intermediate", "2-5", "3-5", "2+ years"],
-        "senior": ["senior", "sr.", "lead", "staff", "principal", "5-8", "5+ years", "8+ years"],
-        "staff": ["staff", "principal", "architect", "director", "8+ years", "10+ years"],
+@app.get("/profile")
+def get_profile():
+    if not RESUME_PATH.exists():
+        return {"error": f"{RESUME_PATH} not found"}
+    raw = RESUME_PATH.read_text()
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    name = lines[0] if lines else "Applicant"
+    email = next((l for l in lines if "@" in l), "")
+    phone = next((l for l in lines if any(c.isdigit() for c in l) and len(l) > 9), "")
+    parts = name.split()
+    return {
+        "name": name,
+        "first_name": parts[0] if parts else "",
+        "last_name": parts[-1] if len(parts) > 1 else "",
+        "email": email,
+        "phone": phone,
+        "raw": raw,
     }
-    for level_hint in level_map.get(config.experience_level, []):
-        if level_hint in combined:
-            score += 15
-            reasons.append(f"Matches {config.experience_level} level")
-            break
-
-    if config.remote_only and any(
-        r in combined for r in ["remote", "work from home", "wfh", "anywhere"]
-    ):
-        score += 20
-        reasons.append("Remote friendly")
-
-    excluded_found = [ex for ex in config.exclude_keywords if ex.lower() in combined]
-    if excluded_found:
-        score -= 30 * len(excluded_found)
-        reasons.append(f"Excluded keywords: {', '.join(excluded_found)}")
-
-    salary_val = parse_salary(job.salary or "")
-
-    if config.min_salary_lakhs and salary_val and salary_val > 10000:
-        lakhs = salary_val / 100000
-        if lakhs < config.min_salary_lakhs:
-            score -= 30
-            reasons.append(f"Salary {lakhs:.1f}L < {config.min_salary_lakhs}L")
-
-    if config.min_salary and salary_val and salary_val >= 10000:
-        if salary_val < config.min_salary:
-            score -= 25
-            reasons.append(f"Salary below ${config.min_salary}")
-
-    if len(job.description) > 100:
-        prompt = f"""Rate this job relevance 0-100 for this candidate. Be concise.
-
-Candidate: {profile[:600]}
-Job: {job.title} at {job.company}
-Description: {job.description[:1200]}
-Keywords wanted: {config.keywords}
-Exclude: {', '.join(config.exclude_keywords)}
-Min salary: {config.min_salary or 'Any'}
-Experience: {config.experience_level}
-
-Respond ONLY as JSON: {{"score": 75, "salary": "$120k-$150k", "reason": "..."}}
-If no salary, use null."""
-
-        response = await ask_llm(prompt, model=config.llm_model, timeout=config.llm_timeout)
-        try:
-            json_match = re.search(r"\{.*\}", response, re.DOTALL)
-            if json_match:
-                result = json.loads(json_match.group())
-                llm_score = float(result.get("score", score))
-                llm_salary = result.get("salary")
-                llm_reason = result.get("reason", "LLM evaluated")
-
-                final_score = (llm_score * 0.6) + (min(score, 100) * 0.4)
-                return final_score, llm_reason, llm_salary or job.salary
-        except Exception as e:
-            print(f"    LLM parse failed: {e}")
-
-    final_score = min(max(score, 0), 100)
-    reason = "; ".join(reasons) if reasons else "Keyword-based match"
-    return final_score, reason, job.salary
-4. src/sources/indeed.py — Use curl_cffi + parse job links directly
-Indeed blocks httpx. curl_cffi bypasses the TLS fingerprint check. We also switch to parsing the actual job links (/rc/clk?jk=...) instead of fragile card selectors.
-Python
-import asyncio
-import re
-from urllib.parse import quote_plus
-
-from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
-
-from src.config import SearchConfig
-from src.models import JobListing
 
 
-class IndeedSource:
-    @staticmethod
-    def build_url(config: SearchConfig, start: int = 0) -> str:
-        base = "https://www.indeed.com/jobs"
-        params = {
-            "q": config.keywords,
-            "l": config.location,
-            "fromage": "1",
-            "start": start,
+@app.get("/jobs")
+def get_jobs():
+    p = _latest_jobs_file()
+    if not p:
+        return []
+    return json.loads(p.read_text())
+
+
+@app.get("/jobs-view", response_class=HTMLResponse)
+def jobs_view():
+    """Simple HTML page so you can browse jobs in a tab."""
+    p = _latest_jobs_file()
+    if not p:
+        return "<h1>No jobs found. Run aggregator first.</h1>"
+    jobs = json.loads(p.read_text())
+    rows = ""
+    for j in jobs[:50]:
+        rows += (
+            f'<tr>'
+            f'<td style="padding:8px;border-bottom:1px solid #334155;">{j.get("score",0)}</td>'
+            f'<td style="padding:8px;border-bottom:1px solid #334155;"><a href="{j["url"]}" target="_blank" style="color:#60a5fa;">{j["title"]}</a></td>'
+            f'<td style="padding:8px;border-bottom:1px solid #334155;">{j.get("company","")}</td>'
+            f'<td style="padding:8px;border-bottom:1px solid #334155;">{j.get("source","")}</td>'
+            f'</tr>'
+        )
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>JobBot Jobs</title></head>
+<body style="background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif;padding:24px;">
+<h2>Latest Jobs ({len(jobs)} found)</h2>
+<table style="width:100%;border-collapse:collapse;">
+<thead><tr style="text-align:left;border-bottom:2px solid #475569;">
+<th style="padding:8px;">Score</th><th style="padding:8px;">Title</th><th style="padding:8px;">Company</th><th style="padding:8px;">Source</th>
+</tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</body></html>"""
+
+
+@app.post("/cover-letter")
+async def cover_letter(payload: dict):
+    profile = payload.get("profile", {})
+    job_title = payload.get("job_title", "")
+    company = payload.get("company", "")
+    description = payload.get("description", "")[:1800]
+
+    prompt = (
+        f"You are {profile.get('name', 'the applicant')}. Write a brief, professional cover letter "
+        f"for this job:\n\nCompany: {company}\nRole: {job_title}\n"
+        f"Description: {description}\n\nYour profile:\n{profile.get('raw', '')[:1000]}\n\n"
+        f"Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience. "
+        f"Do not include addresses, dates, or salutations like 'Dear Hiring Manager'. Just the body paragraphs."
+    )
+
+    try:
+        async with httpx.AsyncClient(timeout=config.llm_timeout) as client:
+            r = await client.post(
+                config.llm_api,
+                json={"model": config.llm_model, "prompt": prompt, "stream": False},
+            )
+            text = r.json().get("response", "").strip()
+            return {"cover_letter": text}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.server:app", host="127.0.0.1", port=8765, reload=False, log_level="info")
+2. jobbot-assistant.user.js — Tampermonkey userscript
+Save this as jobbot-assistant.user.js in your repo, then install it via Tampermonkey (Create new script → paste → save).
+JavaScript
+// ==UserScript==
+// @name         JobBot Assistant
+// @namespace    jobbot
+// @version      2.0
+// @description  Auto-fill job applications using your local JobBot profile
+// @author       You
+// @match        *://*.greenhouse.io/*
+// @match        *://boards.greenhouse.io/*
+// @match        *://*.lever.co/*
+// @match        *://jobs.lever.co/*
+// @match        *://*.workday.com/*
+// @match        *://*.myworkdayjobs.com/*
+// @match        *://*.linkedin.com/*
+// @match        *://*.indeed.com/*
+// @match        *://*.breezy.hr/*
+// @match        *://*.recruitee.com/*
+// @match        *://*.workable.com/*
+// @match        *://*.smartrecruiters.com/*
+// @match        *://*.ashbyhq.com/*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    const SERVER = 'http://127.0.0.1:8765';
+    let profileCache = null;
+
+    /* ── Platform detection ── */
+    function detectPlatform() {
+        const h = location.hostname;
+        if (h.includes('greenhouse.io')) return 'greenhouse';
+        if (h.includes('lever.co')) return 'lever';
+        if (h.includes('workday.com') || h.includes('myworkdayjobs.com')) return 'workday';
+        if (h.includes('linkedin.com')) return 'linkedin';
+        if (h.includes('indeed.com')) return 'indeed';
+        if (h.includes('breezy.hr')) return 'breezy';
+        if (h.includes('recruitee.com')) return 'recruitee';
+        if (h.includes('workable.com')) return 'workable';
+        if (h.includes('smartrecruiters.com')) return 'smartrecruiters';
+        if (h.includes('ashbyhq.com')) return 'ashby';
+        return 'generic';
+    }
+    const PLATFORM = detectPlatform();
+
+    /* ── Platform-specific selectors ── */
+    const SELECTORS = {
+        greenhouse: {
+            firstName: ['#first_name'],
+            lastName: ['#last_name'],
+            fullName: [],
+            email: ['#email'],
+            phone: ['#phone'],
+            coverLetter: ['#cover_letter'],
+            resume: ['#resume']
+        },
+        lever: {
+            firstName: [],
+            lastName: [],
+            fullName: ['input[name="name"]'],
+            email: ['input[name="email"]'],
+            phone: ['input[name="phone"]'],
+            coverLetter: ['textarea[name="comments"]'],
+            resume: ['input[name="resume"]']
+        },
+        workday: {
+            firstName: ['input[data-automation-id="legalNameSection_firstName"]', 'input[autocomplete="given-name"]'],
+            lastName: ['input[data-automation-id="legalNameSection_lastName"]', 'input[autocomplete="family-name"]'],
+            fullName: [],
+            email: ['input[data-automation-id="email"]', 'input[type="email"]'],
+            phone: ['input[data-automation-id="phone-number"]'],
+            coverLetter: ['textarea[data-automation-id="coverLetter"]'],
+            resume: ['input[data-automation-id="resume"]']
+        },
+        linkedin: {
+            firstName: ['#single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-0-firstName'],
+            lastName: ['#single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-0-lastName'],
+            fullName: [],
+            email: ['#single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-0-email'],
+            phone: ['#single-line-text-form-component-formElement-urn-li-jobs-applyformcommon-easyApplyFormElement-0-phoneNumber'],
+            coverLetter: [],
+            resume: []
+        },
+        indeed: {
+            firstName: ['#input-firstName'],
+            lastName: ['#input-lastName'],
+            fullName: [],
+            email: ['#input-email'],
+            phone: ['#input-phoneNumber'],
+            coverLetter: [],
+            resume: []
+        },
+        breezy: {
+            firstName: ['#candidate_first_name'],
+            lastName: ['#candidate_last_name'],
+            fullName: [],
+            email: ['#candidate_email'],
+            phone: ['#candidate_phone'],
+            coverLetter: ['#candidate_cover_letter'],
+            resume: ['#candidate_resume']
+        },
+        recruitee: {
+            firstName: ['#candidate_first_name'],
+            lastName: ['#candidate_last_name'],
+            fullName: [],
+            email: ['#candidate_email'],
+            phone: ['#candidate_phone'],
+            coverLetter: ['#candidate_cover_letter'],
+            resume: ['#candidate_cv']
+        },
+        workable: {
+            firstName: ['#candidate_first_name'],
+            lastName: ['#candidate_last_name'],
+            fullName: [],
+            email: ['#candidate_email'],
+            phone: ['#candidate_phone'],
+            coverLetter: ['#candidate_cover_letter'],
+            resume: ['#candidate_resume']
+        },
+        smartrecruiters: {
+            firstName: ['input[name="firstName"]'],
+            lastName: ['input[name="lastName"]'],
+            fullName: [],
+            email: ['input[name="email"]'],
+            phone: ['input[name="phone"]'],
+            coverLetter: ['textarea[name="coverLetter"]'],
+            resume: ['input[name="resume"]']
+        },
+        ashby: {
+            firstName: ['input[name="firstName"]'],
+            lastName: ['input[name="lastName"]'],
+            fullName: [],
+            email: ['input[name="email"]'],
+            phone: ['input[name="phone"]'],
+            coverLetter: ['textarea[name="coverLetter"]'],
+            resume: ['input[name="resume"]']
+        },
+        generic: {
+            firstName: [],
+            lastName: [],
+            fullName: [],
+            email: [],
+            phone: [],
+            coverLetter: [],
+            resume: []
         }
-        if config.remote_only:
-            params["sc"] = "0kf:attr(DSQF7);"
-        query = "&".join(f"{k}={quote_plus(str(v))}" for k, v in params.items())
-        return f"{base}?{query}"
+    };
 
-    @staticmethod
-    async def scrape(config: SearchConfig) -> list[JobListing]:
-        jobs: list[JobListing] = []
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
+    /* ── UI Panel ── */
+    const panel = document.createElement('div');
+    panel.id = 'jobbot-panel';
+    panel.innerHTML = `
+      <div style="position:fixed;bottom:20px;right:20px;z-index:99999;background:#0f172a;color:#e2e8f0;padding:16px;border-radius:12px;font-family:system-ui,-apple-system,sans-serif;box-shadow:0 10px 40px rgba(0,0,0,0.5);width:320px;border:1px solid #334155;max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+          <strong style="font-size:14px;">🤖 JobBot</strong>
+          <div>
+            <span id="jb-badge" style="font-size:10px;background:#334155;padding:2px 6px;border-radius:4px;margin-right:6px;text-transform:uppercase;">${PLATFORM}</span>
+            <button id="jb-close" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px;line-height:1;">×</button>
+          </div>
+        </div>
+        <div id="jb-status" style="font-size:12px;color:#94a3b8;margin-bottom:12px;min-height:18px;">Checking server...</div>
+
+        <button id="jb-fill" style="width:100%;padding:10px;margin-bottom:8px;background:#10b981;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Fill Profile</button>
+        <button id="jb-cover" style="width:100%;padding:10px;margin-bottom:8px;background:#3b82f6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Generate Cover Letter</button>
+        <button id="jb-all" style="width:100%;padding:10px;margin-bottom:8px;background:#8b5cf6;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Fill All (Profile + Cover)</button>
+        <button id="jb-jobs" style="width:100%;padding:10px;background:#ef4444;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:600;font-size:13px;">Open Latest Jobs</button>
+
+        <div id="jb-extra" style="margin-top:10px;font-size:12px;"></div>
+        <div id="jb-warning" style="margin-top:10px;font-size:11px;color:#fbbf24;display:none;"></div>
+      </div>
+    `;
+    document.body.appendChild(panel);
+
+    const $ = id => document.getElementById(id);
+    const statusEl = $('jb-status');
+    const extraEl = $('jb-extra');
+    const warningEl = $('jb-warning');
+
+    function setStatus(msg) { statusEl.textContent = msg; }
+    function showWarning(msg) { warningEl.textContent = msg; warningEl.style.display = 'block'; }
+
+    $('jb-close').onclick = () => { panel.style.display = 'none'; };
+    document.addEventListener('keydown', (e) => {
+        if (e.ctrlKey && e.shiftKey && e.key === 'J') {
+            panel.style.display = panel.style.display === 'none' ? 'block' : 'none';
         }
+    });
 
-        async with AsyncSession(impersonate="chrome124") as client:
-            for start in range(0, config.max_jobs_per_source * 2, 15):
-                url = IndeedSource.build_url(config, start)
-                print(f"  Indeed: {url[:90]}...")
+    /* ── Server health ── */
+    fetch(`${SERVER}/`).then(r => r.json()).then(() => {
+        setStatus('Connected — ready');
+    }).catch(() => {
+        setStatus('⚠️ Server offline. Run: uv run python src/server.py');
+    });
 
-                try:
-                    resp = await client.get(url, headers=headers, timeout=30)
-                    if resp.status_code != 200:
-                        print(f"    Indeed returned {resp.status_code}")
-                        break
-
-                    soup = BeautifulSoup(resp.text, "html.parser")
-
-                    # Indeed job links always contain /rc/clk?jk= or /viewjob?jk=
-                    job_links = soup.find_all(
-                        "a", href=re.compile(r"/rc/clk\?jk=|/viewjob\?jk=")
-                    )
-                    print(f"    Found {len(job_links)} job links")
-
-                    if not job_links:
-                        break
-
-                    seen = set()
-                    for link in job_links[:config.max_jobs_per_source]:
-                        href = link.get("href", "")
-                        if not href or href in seen:
-                            continue
-                        seen.add(href)
-
-                        title = link.get_text(strip=True)
-                        if not title:
-                            continue
-
-                        # Walk up to find the card container
-                        parent = link.find_parent(
-                            "div",
-                            class_=re.compile(
-                                r"job_seen_beacon|slider_container|mosaic-provider-jobcard|jobCard"
-                            ),
-                        )
-
-                        company = ""
-                        location = ""
-                        posted = ""
-                        if parent:
-                            comp_el = parent.select_one(
-                                "[data-testid='company-name'], .companyName, span.company"
-                            )
-                            loc_el = parent.select_one(
-                                "[data-testid='job-location'], div.companyLocation, span.location"
-                            )
-                            date_el = parent.select_one(
-                                "span.date, span[data-testid='job-date']"
-                            )
-                            company = comp_el.get_text(strip=True) if comp_el else ""
-                            location = loc_el.get_text(strip=True) if loc_el else ""
-                            posted = date_el.get_text(strip=True) if date_el else ""
-
-                        full_url = (
-                            href
-                            if href.startswith("http")
-                            else f"https://www.indeed.com{href}"
-                        )
-                        jobs.append(
-                            JobListing(
-                                title=title,
-                                company=company,
-                                location=location,
-                                url=full_url,
-                                source="indeed",
-                                posted_date=posted,
-                            )
-                        )
-
-                    if len(job_links) < 15:
-                        break
-                    await asyncio.sleep(1)
-
-                except Exception as e:
-                    print(f"    Indeed error: {e}")
-                    break
-
-        print(f"    {len(jobs)} Indeed jobs")
-        return jobs
-5. src/sources/naukri.py — More robust selectors + debug
-Naukri changes class names frequently. This adds broader fallbacks and prints a snippet of HTML when nothing is found so you can inspect.
-Python
-from urllib.parse import quote
-
-from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
-
-from src.config import SearchConfig
-from src.models import JobListing
-
-
-class NaukriSource:
-    @staticmethod
-    def build_url(config: SearchConfig) -> str:
-        kw_slug = config.keywords.replace(" ", "-").lower()
-        base = f"https://www.naukri.com/{kw_slug}-jobs"
-        params: dict[str, str] = {"k": config.keywords}
-        if config.naukri_experience:
-            params["experience"] = config.naukri_experience
-        if config.naukri_salary_lakhs:
-            params["ctcFilter"] = config.naukri_salary_lakhs
-        if config.remote_only:
-            params["wfhType"] = "1"
-        query = "&".join(f"{k}={quote(str(v))}" for k, v in params.items())
-        return f"{base}?{query}"
-
-    @staticmethod
-    async def scrape(config: SearchConfig) -> list[JobListing]:
-        url = NaukriSource.build_url(config)
-        print(f"  Naukri: {url[:90]}...")
-
-        jobs: list[JobListing] = []
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept-Encoding": "gzip, deflate, br",
-            "DNT": "1",
-            "Connection": "keep-alive",
+    /* ── Field helpers ── */
+    function getLabel(el) {
+        if (el.id) {
+            const lbl = document.querySelector(`label[for="${CSS.escape(el.id)}"]`);
+            if (lbl) return lbl.innerText;
         }
+        const parent = el.closest('label');
+        if (parent) return parent.innerText;
+        const ariaId = el.getAttribute('aria-labelledby');
+        if (ariaId) {
+            const lbl = document.getElementById(ariaId);
+            if (lbl) return lbl.innerText;
+        }
+        return el.getAttribute('aria-label') || '';
+    }
 
-        try:
-            async with AsyncSession(impersonate="chrome124") as client:
-                resp = await client.get(url, headers=headers, timeout=30)
-                if resp.status_code != 200:
-                    print(f"    Naukri returned {resp.status_code}")
-                    return jobs
+    function queryPlatformOrGeneric(type) {
+        const sels = SELECTORS[PLATFORM][type] || [];
+        for (const s of sels) {
+            const el = document.querySelector(s);
+            if (el) return el;
+        }
+        // Fallback: heuristic label/placeholder search
+        const keywords = {
+            firstName: ['first name', 'given name', 'fname', 'first-name'],
+            lastName: ['last name', 'surname', 'lname', 'last-name'],
+            fullName: ['full name', 'name', 'your name'],
+            email: ['email', 'e-mail'],
+            phone: ['phone', 'mobile', 'cell', 'tel'],
+            coverLetter: ['cover letter', 'additional', 'message', 'why', 'tell us', 'comments', 'note', 'summary'],
+            resume: ['resume', 'cv', 'upload']
+        }[type] || [];
+        const inputs = document.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]), textarea, select');
+        for (const el of inputs) {
+            const text = `${getLabel(el)} ${el.placeholder || ''} ${el.name || ''} ${el.id || ''}`.toLowerCase();
+            if (keywords.some(k => text.includes(k))) return el;
+        }
+        return null;
+    }
 
-                text = resp.text
-                soup = BeautifulSoup(text, "html.parser")
+    function setField(el, value) {
+        if (!el) return false;
+        if (el.tagName === 'SELECT') {
+            const opts = Array.from(el.options);
+            const yesOpt = opts.find(o => /yes|agree|confirm|accept/i.test(o.text));
+            if (yesOpt) el.value = yesOpt.value;
+            else if (opts.length > 1) el.value = opts[1].value;
+        } else {
+            el.focus();
+            el.value = value;
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            el.blur();
+        }
+        return true;
+    }
 
-                # Try multiple container selectors
-                listings = (
-                    soup.select(".srp-jobtuple-wrapper")
-                    or soup.select("article.jobTuple")
-                    or soup.select("div.jobTuple")
-                    or soup.select("[data-job-id]")
-                    or soup.select("div.list")
-                    or soup.select("div.job")
-                )
+    /* ── Profile ── */
+    async function loadProfile() {
+        if (profileCache) return profileCache;
+        const res = await fetch(`${SERVER}/profile`);
+        profileCache = await res.json();
+        if (profileCache.error) throw new Error(profileCache.error);
+        return profileCache;
+    }
 
-                print(f"    Found {len(listings)} listings")
+    async function fillProfile() {
+        const p = await loadProfile();
+        let filled = 0;
+        let fn = queryPlatformOrGeneric('firstName');
+        let ln = queryPlatformOrGeneric('lastName');
+        if (!fn && !ln) {
+            const full = queryPlatformOrGeneric('fullName');
+            if (full) { setField(full, p.name); filled++; }
+        } else {
+            if (setField(fn, p.first_name)) filled++;
+            if (setField(ln, p.last_name)) filled++;
+        }
+        if (setField(queryPlatformOrGeneric('email'), p.email)) filled++;
+        if (setField(queryPlatformOrGeneric('phone'), p.phone)) filled++;
+        return filled;
+    }
 
-                if not listings:
-                    # Debug: print first 800 chars of body so you can see what arrived
-                    print(f"    DEBUG HTML snippet: {text[:800]}")
+    $('jb-fill').onclick = async () => {
+        try {
+            setStatus('Filling profile...');
+            const n = await fillProfile();
+            setStatus(`Filled ${n} profile fields. Upload resume manually.`);
+            const resumeEl = queryPlatformOrGeneric('resume');
+            if (resumeEl) showWarning('⚠️ Resume upload must be done manually (browser security).');
+        } catch (e) { setStatus('Error: ' + e.message); }
+    };
 
-                for listing in listings[:config.max_jobs_per_source]:
-                    try:
-                        title_el = (
-                            listing.select_one("a.title")
-                            or listing.select_one("a.srp-jd-p-title")
-                            or listing.select_one("h2 a")
-                            or listing.select_one("a[class*='title']")
-                        )
-                        company_el = (
-                            listing.select_one("a.comp-name")
-                            or listing.select_one("a[href*='/company/']")
-                            or listing.select_one("div.company-name")
-                            or listing.select_one("[class*='company']")
-                        )
-                        loc_el = (
-                            listing.select_one("span.locWdth")
-                            or listing.select_one("span.location")
-                            or listing.select_one("div.location")
-                            or listing.select_one("[class*='loc']")
-                        )
-                        desc_el = (
-                            listing.select_one("span.job-desc")
-                            or listing.select_one("[class*='desc']")
-                        )
-                        salary_el = (
-                            listing.select_one("span.sal")
-                            or listing.select_one("span.salary")
-                            or listing.select_one("[class*='salary']")
-                        )
-                        exp_el = (
-                            listing.select_one("span.expwdth")
-                            or listing.select_one("span.exp")
-                            or listing.select_one("[class*='exp']")
-                        )
+    /* ── Cover letter ── */
+    function extractJobDetails() {
+        const h1 = document.querySelector('h1, h2');
+        const title = h1 ? h1.innerText.trim() : document.title;
+        let company = '';
+        const og = document.querySelector('meta[property="og:site_name"]');
+        if (og) company = og.content;
+        else {
+            const m = window.location.hostname.match(/^([^\.]+)\./);
+            if (m) company = m[1];
+        }
+        let desc = '';
+        const descSelectors = [
+            '[class*="description"]', '[class*="job-description"]', '#jobDescriptionText',
+            '[data-testid*="description"]', '.section.page-centered', '[class*="posting"]',
+            '[class*="jobDescription"]', '[class*="details"]'
+        ];
+        for (const s of descSelectors) {
+            const el = document.querySelector(s);
+            if (el) { desc = el.innerText.substring(0, 2500); break; }
+        }
+        return { job_title: title, company, description: desc };
+    }
 
-                        title = title_el.get_text(strip=True) if title_el else ""
-                        href = title_el.get("href") if title_el else ""
-                        company = company_el.get_text(strip=True) if company_el else ""
-                        location = loc_el.get_text(strip=True) if loc_el else ""
-                        description = desc_el.get_text(strip=True) if desc_el else ""
-                        salary = salary_el.get_text(strip=True) if salary_el else ""
-                        exp = exp_el.get_text(strip=True) if exp_el else ""
+    async function fillCoverLetter() {
+        const p = await loadProfile();
+        const job = extractJobDetails();
+        setStatus('Generating cover letter...');
+        const res = await fetch(`${SERVER}/cover-letter`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ profile: p, ...job })
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        const el = queryPlatformOrGeneric('coverLetter');
+        if (el) {
+            setField(el, data.cover_letter);
+            return { filled: true, text: data.cover_letter };
+        } else {
+            return { filled: false, text: data.cover_letter };
+        }
+    }
 
-                        if title and href:
-                            full_url = (
-                                href
-                                if href.startswith("http")
-                                else f"https://www.naukri.com{href}"
-                            )
-                            jobs.append(
-                                JobListing(
-                                    title=title,
-                                    company=company,
-                                    location=(location or exp),
-                                    url=full_url,
-                                    salary=salary if salary else None,
-                                    description=description,
-                                    source="naukri",
-                                )
-                            )
-                    except Exception:
-                        continue
+    $('jb-cover').onclick = async () => {
+        try {
+            const result = await fillCoverLetter();
+            if (result.filled) {
+                setStatus('Cover letter filled.');
+            } else {
+                extraEl.innerHTML = `<textarea style="width:100%;height:140px;margin-top:8px;font-size:12px;border-radius:4px;padding:8px;">${result.text.replace(/</g,'&lt;')}</textarea>`;
+                setStatus('No cover letter field found. Copied above — paste manually.');
+            }
+        } catch (e) { setStatus('Error: ' + e.message); }
+    };
 
-                print(f"    {len(jobs)} Naukri jobs")
+    /* ── Fill All ── */
+    $('jb-all').onclick = async () => {
+        try {
+            setStatus('Filling profile...');
+            const n = await fillProfile();
+            setStatus('Generating cover letter...');
+            const result = await fillCoverLetter();
+            if (result.filled) {
+                setStatus(`Filled ${n} fields + cover letter. Review & submit.`);
+            } else {
+                extraEl.innerHTML = `<textarea style="width:100%;height:140px;margin-top:8px;font-size:12px;border-radius:4px;padding:8px;">${result.text.replace(/</g,'&lt;')}</textarea>`;
+                setStatus(`Filled ${n} fields. Cover letter copied above — paste manually.`);
+            }
+            const resumeEl = queryPlatformOrGeneric('resume');
+            if (resumeEl) showWarning('⚠️ Remember to upload your resume manually.');
+        } catch (e) { setStatus('Error: ' + e.message); }
+    };
 
-        except Exception as e:
-            print(f"    Naukri error: {e}")
-
-        return jobs
-6. src/sources/remoteok.py — Remove keyword gate
-RemoteOK’s API is already scoped to remote tech jobs. Your client-side keyword filter was rejecting valid jobs because the description didn’t contain the exact phrase.
+    /* ── Open Jobs ── */
+    $('jb-jobs').onclick = async () => {
+        try {
+            const res = await fetch(`${SERVER}/jobs`);
+            const jobs = await res.json();
+            if (!jobs.length) {
+                setStatus('No jobs found. Run aggregator first.');
+                return;
+            }
+            const list = jobs.slice(0, 15).map(j =>
+                `<li style="margin-bottom:6px;"><a href="${j.url}" target="_blank" style="color:#60a5fa;text-decoration:none;">${j.title} @ ${j.company}</a> <span style="color:#64748b;">(${j.source})</span></li>`
+            ).join('');
+            extraEl.innerHTML = `<ul style="padding-left:16px;font-size:12px;max-height:240px;overflow-y:auto;">${list}</ul>`;
+            setStatus(`Showing ${Math.min(jobs.length, 15)} jobs.`);
+        } catch (e) { setStatus('Error loading jobs.'); }
+    };
+})();
+3. Tiny modifications to existing files
+In src/aggregator.py, change the final print inside save_results:
 Python
-import httpx
+# Replace this:
+print("\nNext: uv run python apply.py output/jobs_to_apply/jobs_to_apply_*.txt")
 
-from src.config import SearchConfig
-from src.models import JobListing
-
-
-class RemoteOKSource:
-    @staticmethod
-    async def scrape(config: SearchConfig) -> list[JobListing]:
-        url = "https://remoteok.com/api"
-        print(f"  RemoteOK: {url}")
-
-        jobs: list[JobListing] = []
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0"})
-                resp.raise_for_status()
-                data = resp.json()
-
-                # First element is metadata
-                for item in data[1:]:
-                    title = item.get("position", "")
-                    company = item.get("company", "")
-                    location = item.get("location", "Remote")
-                    desc = item.get("description", "")
-                    tags = " ".join(item.get("tags", []))
-                    job_url = item.get("url", "")
-                    if job_url and not job_url.startswith("http"):
-                        job_url = f"https://remoteok.com{job_url}"
-
-                    # Let the scoring layer handle relevance; keep all tech jobs
-                    jobs.append(
-                        JobListing(
-                            title=title,
-                            company=company,
-                            location=location,
-                            url=job_url,
-                            description=f"{desc} {tags}",
-                            source="remoteok",
-                        )
-                    )
-                print(f"    {len(jobs)} RemoteOK jobs")
-
-        except Exception as e:
-            print(f"    RemoteOK error: {e}")
-
-        return jobs
-7. src/sources/weworkremotely.py — Remove keyword gate
-Same logic: the RSS feed is already curated for programming jobs.
+# With this:
+print("\nNext steps:")
+print("  1. uv run python src/server.py")
+print("  2. Install jobbot-assistant.user.js in Tampermonkey")
+print("  3. Open job URLs from output/jobs_to_apply/*.txt")
+In src/cli.py, change the same final print:
 Python
-import feedparser
-import httpx
+# Replace this:
+print("\nNext: uv run python apply.py output/jobs_to_apply/jobs_to_apply_*.txt")
 
-from src.config import SearchConfig
-from src.models import JobListing
-
-
-class WeWorkRemotelySource:
-    @staticmethod
-    async def scrape(config: SearchConfig) -> list[JobListing]:
-        url = "https://weworkremotely.com/categories/remote-programming-jobs.rss"
-        print(f"  WeWorkRemotely: {url}")
-
-        jobs: list[JobListing] = []
-        try:
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                feed = feedparser.parse(resp.text)
-
-                for entry in feed.entries:
-                    title = entry.get("title", "")
-                    company = ""
-                    if ":" in title:
-                        parts = title.split(":", 1)
-                        company = parts[0].strip()
-                        title = parts[1].strip()
-
-                    # Keep all programming jobs; let scoring filter relevance
-                    jobs.append(
-                        JobListing(
-                            title=title,
-                            company=company,
-                            location="Remote",
-                            url=entry.get("link", ""),
-                            description=entry.get("summary", ""),
-                            source="weworkremotely",
-                        )
-                    )
-                print(f"    {len(jobs)} WeWorkRemotely jobs")
-
-        except Exception as e:
-            print(f"    WeWorkRemotely error: {e}")
-
-        return jobs
-8. src/sources/wellfound.py — Filter out irrelevant Apollo jobs
-Wellfound’s __NEXT_DATA__ Apollo cache contains every job on the page (Sales, Recruiting, etc.), not just the ones matching your role query. We filter by keyword before appending.
-Python
-import json
-import re
-from urllib.parse import quote
-
-from bs4 import BeautifulSoup
-from curl_cffi.requests import AsyncSession
-
-from src.config import SearchConfig
-from src.models import JobListing
-
-
-class WellfoundSource:
-    @staticmethod
-    async def scrape(config: SearchConfig) -> list[JobListing]:
-        roles = quote(config.keywords.replace(" ", "-").lower())
-        url = f"https://wellfound.com/jobs?roles={roles}"
-        if config.remote_only:
-            url += "&remote=true"
-        print(f"  Wellfound: {url[:90]}...")
-
-        jobs: list[JobListing] = []
-        kw_parts = [k for k in config.keywords.lower().split() if len(k) > 2]
-
-        try:
-            async with AsyncSession(impersonate="chrome124") as client:
-                resp = await client.get(url, timeout=30)
-                if resp.status_code != 200:
-                    print(f"    Wellfound returned {resp.status_code}")
-                    return jobs
-
-                text = resp.text
-                next_data_match = re.search(
-                    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text, re.S
-                )
-                if next_data_match:
-                    data = json.loads(next_data_match.group(1))
-                    apollo = data.get("props", {}).get("pageProps", {}).get("apolloState", {})
-                    for key, node in apollo.items():
-                        if key.startswith("JobListing:"):
-                            title = node.get("title") or node.get("displayTitle", "")
-                            company_data = node.get("company")
-                            company = ""
-                            if isinstance(company_data, dict):
-                                company = company_data.get("name", "")
-                            elif isinstance(company_data, str) and company_data.startswith("Company:"):
-                                company = apollo.get(company_data, {}).get("name", "")
-
-                            loc = node.get("location", "Remote")
-                            href = node.get("jobUrl") or node.get("applyUrl", "")
-                            if href and not href.startswith("http"):
-                                href = f"https://wellfound.com{href}"
-
-                            desc = node.get("description", "")
-
-                            # Wellfound Apollo cache contains ALL jobs on the page.
-                            # Filter by keyword so we don't get Sales Reps.
-                            text_combined = f"{title} {desc}".lower()
-                            if kw_parts and not any(k in text_combined for k in kw_parts):
-                                continue
-
-                            if title and href:
-                                jobs.append(
-                                    JobListing(
-                                        title=title,
-                                        company=company,
-                                        location=loc,
-                                        url=href,
-                                        description=desc,
-                                        source="wellfound",
-                                    )
-                                )
-                else:
-                    # Fallback: link extraction
-                    soup = BeautifulSoup(text, "html.parser")
-                    seen = set()
-                    for link in soup.find_all("a", href=re.compile(r"/jobs/\d+")):
-                        href = link.get("href", "")
-                        if not href or href in seen:
-                            continue
-                        seen.add(href)
-                        full_url = href if href.startswith("http") else f"https://wellfound.com{href}"
-                        text_content = link.get_text(separator=" ", strip=True)
-                        lines = [ln for ln in text_content.split("\n") if ln.strip()]
-                        title = lines[0] if lines else "Unknown"
-                        company = lines[1] if len(lines) > 1 else ""
-
-                        text_combined = f"{title}".lower()
-                        if kw_parts and not any(k in text_combined for k in kw_parts):
-                            continue
-
-                        jobs.append(
-                            JobListing(
-                                title=title,
-                                company=company,
-                                location="Remote",
-                                url=full_url,
-                                source="wellfound",
-                            )
-                        )
-
-                print(f"    {len(jobs)} Wellfound jobs")
-
-        except Exception as e:
-            print(f"    Wellfound error: {e}")
-
-        return jobs
-What you should see after these fixes
-Table
-Source	Before	After (expected)
-LinkedIn	10 found → 0 saved	10 found → 10 saved (time filter fixed)
-Indeed	0	10-15 (curl_cffi bypass)
-Naukri	0	0-15 (better selectors; if still 0, check the debug HTML snippet)
-Wellfound	49 garbage	5-15 relevant (keyword filter added)
-RemoteOK	0	20-50 (gate removed)
-WeWorkRemotely	0	10-30 (gate removed)
-Run it again with:
+# With this:
+print("\nNext steps:")
+print("  1. uv run python src/server.py")
+print("  2. Install jobbot-assistant.user.js in Tampermonkey")
+print("  3. Open job URLs from output/jobs_to_apply/*.txt")
+4. Setup & daily workflow
 bash
-uv run python aggregator.py
-If Naukri still shows 0, look for the DEBUG HTML snippet line in your terminal — it will show you what Naukri actually sent back (usually a Cloudflare challenge or a new DOM structure), and we can adjust from there.
+# 1. Update dependencies
+uv remove playwright
+uv add fastapi uvicorn
+
+# 2. Start the server (leave running)
+uv run python src/server.py
+
+# 3. In another terminal, run the aggregator
+uv run python src/cli.py
+
+# 4. Open http://127.0.0.1:8765/jobs-view in a browser tab
+#    or open individual URLs from output/jobs_to_apply/*.txt
+
+# 5. On any job application page, the JobBot panel appears bottom-right.
+#    Click "Fill All", upload your resume manually, review, submit.
+Why this is the best version
+Zero bot detection — you are in your real browser with real cookies.
+Platform-aware — Greenhouse, Lever, Workday, LinkedIn, Indeed, Breezy, Recruitee, Workable, SmartRecruiters, Ashby all have dedicated selectors.
+Graceful fallback — unknown sites still work via label/placeholder heuristics.
+Local LLM — cover letters still use your gemma3 via Ollama; no API keys, no data leaves your machine.
+No maintenance nightmare — if a site changes its CSS, the generic label fallback still works; you only need to update the specific selector list.
+Keyboard shortcut — Ctrl+Shift+J toggles the panel if you need to hide it.
+That is the complete, final implementation.

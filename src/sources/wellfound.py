@@ -29,56 +29,69 @@ class WellfoundSource:
                     return jobs
 
                 text = resp.text
-                next_data_match = re.search(
-                    r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>', text, re.S
+                soup = BeautifulSoup(text, "html.parser")
+
+                next_script = soup.find(
+                    "script", id="__NEXT_DATA__", type="application/json"
                 )
-                if next_data_match:
-                    data = json.loads(next_data_match.group(1))
-                    apollo = data.get("props", {}).get("pageProps", {}).get("apolloState", {})
-                    for key, node in apollo.items():
-                        if key.startswith("JobListing:"):
-                            title = node.get("title") or node.get("displayTitle", "")
-                            company_data = node.get("company")
-                            company = ""
-                            if isinstance(company_data, dict):
-                                company = company_data.get("name", "")
-                            elif isinstance(company_data, str) and company_data.startswith("Company:"):
-                                company = apollo.get(company_data, {}).get("name", "")
+                if next_script and next_script.string:
+                    try:
+                        data = json.loads(next_script.string)
+                        apollo = (
+                            data.get("props", {})
+                            .get("pageProps", {})
+                            .get("apolloState", {})
+                        )
+                        for key, node in apollo.items():
+                            if key.startswith("JobListing:"):
+                                title = node.get("title") or node.get("displayTitle", "")
+                                company_data = node.get("company")
+                                company = ""
+                                if isinstance(company_data, dict):
+                                    company = company_data.get("name", "")
+                                elif (
+                                    isinstance(company_data, str)
+                                    and company_data.startswith("Company:")
+                                ):
+                                    company = apollo.get(company_data, {}).get("name", "")
 
-                            loc = node.get("location", "Remote")
-                            href = node.get("jobUrl") or node.get("applyUrl", "")
-                            if href and not href.startswith("http"):
-                                href = f"https://wellfound.com{href}"
+                                loc = node.get("location", "Remote")
+                                href = node.get("jobUrl") or node.get("applyUrl", "")
+                                if href and not href.startswith("http"):
+                                    href = f"https://wellfound.com{href}"
 
-                            desc = node.get("description", "")
+                                desc = node.get("description", "")
 
-                            # Wellfound Apollo cache contains ALL jobs on the page.
-                            # Filter by keyword so we don't get Sales Reps.
-                            text_combined = f"{title} {desc}".lower()
-                            if kw_parts and not any(k in text_combined for k in kw_parts):
-                                continue
+                                text_combined = f"{title} {desc}".lower()
+                                if kw_parts and not any(k in text_combined for k in kw_parts):
+                                    continue
 
-                            if title and href:
-                                jobs.append(
-                                    JobListing(
-                                        title=title,
-                                        company=company,
-                                        location=loc,
-                                        url=href,
-                                        description=desc,
-                                        source="wellfound",
+                                if title and href:
+                                    jobs.append(
+                                        JobListing(
+                                            title=title,
+                                            company=company,
+                                            location=loc,
+                                            url=href,
+                                            description=desc,
+                                            source="wellfound",
+                                        )
                                     )
-                                )
-                else:
-                    # Fallback: link extraction
-                    soup = BeautifulSoup(text, "html.parser")
+                    except Exception as e:
+                        print(f"    Wellfound __NEXT_DATA__ parse failed: {e}")
+
+                if not jobs:
                     seen = set()
                     for link in soup.find_all("a", href=re.compile(r"/jobs/\d+")):
                         href = link.get("href", "")
                         if not href or href in seen:
                             continue
                         seen.add(href)
-                        full_url = href if href.startswith("http") else f"https://wellfound.com{href}"
+                        full_url = (
+                            href
+                            if href.startswith("http")
+                            else f"https://wellfound.com{href}"
+                        )
                         text_content = link.get_text(separator=" ", strip=True)
                         lines = [ln for ln in text_content.split("\n") if ln.strip()]
                         title = lines[0] if lines else "Unknown"

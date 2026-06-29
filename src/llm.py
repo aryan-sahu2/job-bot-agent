@@ -25,17 +25,20 @@ async def evaluate_job(
 ) -> tuple[float, str, str | None]:
     title_company = f"{job.title} {job.company}".lower()
     desc_lower = job.description.lower()
-    # FIX: include location so "Remote" jobs actually get the remote bonus
     combined = f"{title_company} {desc_lower} {job.location.lower()}"
 
     score = 0.0
     reasons = []
 
-    # FIX: normalize hyphens so "full-stack" matches "full stack"
+    # Title matches are strong signal (×20), description/location are weak (×5)
     kw_clean = config.keywords.lower().replace("-", " ")
-    keyword_hits = sum(1 for k in kw_clean.split() if k in combined)
-    score += keyword_hits * 10
+    keyword_hits_title = sum(1 for k in kw_clean.split() if k in title_company)
+    keyword_hits_other = sum(
+        1 for k in kw_clean.split() if k in f"{desc_lower} {job.location.lower()}"
+    )
+    score += keyword_hits_title * 20 + keyword_hits_other * 5
 
+    # Level bonus: ONLY check title + company to avoid description false-positives
     level_map = {
         "entry": ["entry", "junior", "new grad", "graduate", "0-2", "0 - 2", "fresher"],
         "mid": ["mid", "intermediate", "2-5", "3-5", "2+ years"],
@@ -43,7 +46,7 @@ async def evaluate_job(
         "staff": ["staff", "principal", "architect", "director", "8+ years", "10+ years"],
     }
     for level_hint in level_map.get(config.experience_level, []):
-        if level_hint in combined:
+        if level_hint in title_company:
             score += 15
             reasons.append(f"Matches {config.experience_level} level")
             break
@@ -51,7 +54,7 @@ async def evaluate_job(
     if config.remote_only and any(
         r in combined for r in ["remote", "work from home", "wfh", "anywhere"]
     ):
-        score += 20
+        score += 10
         reasons.append("Remote friendly")
 
     excluded_found = [ex for ex in config.exclude_keywords if ex.lower() in combined]
@@ -72,7 +75,8 @@ async def evaluate_job(
             score -= 25
             reasons.append(f"Salary below ${config.min_salary}")
 
-    if len(job.description) > 100:
+    # Run LLM on shorter descriptions too (many API feeds are concise)
+    if len(job.description) > 50:
         prompt = f"""Rate this job relevance 0-100 for this candidate. Be concise.
 
 Candidate: {profile[:600]}

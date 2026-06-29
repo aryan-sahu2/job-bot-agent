@@ -15,10 +15,12 @@ DEFAULT_CONFIG = {
     "linkedin_time_filter": "r86400",
     "linkedin_remote_filter": "2",
     "linkedin_distance": "25",
-    "naukri_experience": "",
-    "naukri_salary_lakhs": "",
     "greenhouse_boards": [],
     "lever_slugs": [],
+    "breezy_boards": [],
+    "recruitee_boards": [],
+    "workable_accounts": [],
+    "smartrecruiters_companies": [],
     "max_jobs_per_source": 15,
     "llm_api": "http://localhost:11434/api/generate",
     "llm_model": "gemma3",
@@ -44,10 +46,12 @@ class SearchConfig:
     linkedin_time_filter: str = "r86400"
     linkedin_remote_filter: str = "2"
     linkedin_distance: str = "25"
-    naukri_experience: str = ""
-    naukri_salary_lakhs: str = ""
     greenhouse_boards: list[str] = field(default_factory=list)
     lever_slugs: list[str] = field(default_factory=list)
+    breezy_boards: list[str] = field(default_factory=list)
+    recruitee_boards: list[str] = field(default_factory=list)
+    workable_accounts: list[str] = field(default_factory=list)
+    smartrecruiters_companies: list[str] = field(default_factory=list)
     max_jobs_per_source: int = 15
     llm_api: str = "http://localhost:11434/api/generate"
     llm_model: str = "gemma3"
@@ -60,14 +64,17 @@ class SearchConfig:
             self.exclude_keywords = [
                 k.strip() for k in self.exclude_keywords.split(",") if k.strip()
             ]
-        if isinstance(self.greenhouse_boards, str):
-            self.greenhouse_boards = [
-                k.strip() for k in self.greenhouse_boards.split(",") if k.strip()
-            ]
-        if isinstance(self.lever_slugs, str):
-            self.lever_slugs = [
-                k.strip() for k in self.lever_slugs.split(",") if k.strip()
-            ]
+        for attr in (
+            "greenhouse_boards",
+            "lever_slugs",
+            "breezy_boards",
+            "recruitee_boards",
+            "workable_accounts",
+            "smartrecruiters_companies",
+        ):
+            val = getattr(self, attr)
+            if isinstance(val, str):
+                setattr(self, attr, [k.strip() for k in val.split(",") if k.strip()])
 
 
 def load_config(path: str | Path = "config.json") -> SearchConfig:

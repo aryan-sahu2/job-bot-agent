@@ -6,14 +6,15 @@ from pathlib import Path
 from src.config import SearchConfig
 from src.llm import evaluate_job
 from src.models import JobListing, parse_relative_time
+from src.sources.breezy import BreezySource
 from src.sources.greenhouse import GreenhouseSource
 from src.sources.indeed import IndeedSource
 from src.sources.lever import LeverSource
 from src.sources.linkedin import LinkedInSource
-from src.sources.naukri import NaukriSource
-from src.sources.remoteok import RemoteOKSource
+from src.sources.recruitee import RecruiteeSource
+from src.sources.smartrecruiters import SmartRecruitersSource
 from src.sources.wellfound import WellfoundSource
-from src.sources.weworkremotely import WeWorkRemotelySource
+from src.sources.workable import WorkableSource
 
 STEALTH_SCRIPT = """
 Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
@@ -36,10 +37,7 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     tasks = [
         LinkedInSource.scrape(config),
         IndeedSource.scrape(config),
-        NaukriSource.scrape(config),
         WellfoundSource.scrape(config),
-        RemoteOKSource.scrape(config),
-        WeWorkRemotelySource.scrape(config),
     ]
 
     for board in config.greenhouse_boards:
@@ -47,6 +45,18 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
 
     for slug in config.lever_slugs:
         tasks.append(LeverSource.scrape(slug, config))
+
+    for slug in config.breezy_boards:
+        tasks.append(BreezySource.scrape(slug, config))
+
+    for slug in config.recruitee_boards:
+        tasks.append(RecruiteeSource.scrape(slug, config))
+
+    for account in config.workable_accounts:
+        tasks.append(WorkableSource.scrape(account, config))
+
+    for company in config.smartrecruiters_companies:
+        tasks.append(SmartRecruitersSource.scrape(company, config))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
     all_jobs: list[JobListing] = []
@@ -71,7 +81,6 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
         recent = []
         for job in unique:
             posted = parse_relative_time(job.posted_date or "")
-            # Keep job if posted time is recent OR if we couldn't parse it
             if posted is None or posted >= cutoff:
                 recent.append(job)
         unique = recent
