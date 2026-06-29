@@ -7,9 +7,9 @@ from src.config import SearchConfig
 from src.models import JobListing, parse_salary
 
 
-async def ask_llm(prompt: str, model: str = "gemma3") -> str:
+async def ask_llm(prompt: str, model: str = "gemma3", timeout: int = 90) -> str:
     try:
-        async with httpx.AsyncClient(timeout=90) as client:
+        async with httpx.AsyncClient(timeout=timeout) as client:
             r = await client.post(
                 "http://localhost:11434/api/generate",
                 json={"model": model, "prompt": prompt, "stream": False},
@@ -83,7 +83,7 @@ Experience: {config.experience_level}
 Respond ONLY as JSON: {{"score": 75, "salary": "$120k-$150k", "reason": "..."}}
 If no salary, use null."""
 
-        response = await ask_llm(prompt)
+        response = await ask_llm(prompt, model=config.llm_model, timeout=config.llm_timeout)
         try:
             json_match = re.search(r"\{.*\}", response, re.DOTALL)
             if json_match:

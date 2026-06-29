@@ -49,7 +49,7 @@ class NaukriSource:
             print(f"    Found {len(listings)} listings")
 
             jobs: list[JobListing] = []
-            for listing in listings[:20]:
+            for listing in listings[:config.max_jobs_per_source]:
                 try:
                     title_el = await listing.query_selector(
                         "a.title, a[class*='title'], h2 a"

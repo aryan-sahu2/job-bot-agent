@@ -4,7 +4,7 @@ Two scripts that replace complex automation with simple, practical workflows.
 
 ## Scripts
 
-- **`src/cli.py`** (or `aggregator.py`) — Searches LinkedIn, Indeed, Wellfound, Naukri for jobs matching your config. Scores relevance with local LLM (Ollama). Supports recency filter, startup filter, LPA/INR salary parsing. Outputs to `output/` dir.
+- **`src/cli.py`** — Searches LinkedIn, Indeed, Wellfound, Naukri for jobs matching your config. Scores relevance with local LLM (Ollama). Uses `config.json` as single source of truth; CLI flags are temporary overrides.
 - **`src/apply.py`** — Opens each job URL in a visible browser, parses the posting, generates a cover letter via Ollama, fills application form fields automatically, saves a screenshot, and **pauses for your review** before submission. Detects LinkedIn login walls and skips them.
 
 ## Quick Start
@@ -18,28 +18,45 @@ playwright install chromium
 ollama serve
 
 # 1. Update resume.txt with your profile (first line = your name)
-# 2. Find jobs
-uv run python -m src.cli --hours 4 --startup --min-lpa 15 --location "Remote" --keywords "Full Stack Engineer"
+# 2. First run — creates config.json automatically
+uv run python -m src.cli
 
-# 3. Review output/jobs_found_*.json, edit output/jobs_to_apply_*.txt
-# 4. Apply (opens browser, you review before submit)
+# 3. Edit config.json with your preferences
+# 4. Run again → jobs appear in output/
+uv run python -m src.cli
+
+# 5. Review output/jobs_found_*.json, edit output/jobs_to_apply_*.txt
+# 6. Apply (opens browser, you review before submit)
 uv run python src/apply.py output/jobs_to_apply_*.txt
 ```
 
-## CLI Examples
+## Configuration
+
+Edit `config.json` at the project root. Key settings:
+
+| Field | Description |
+|---|---|
+| `keywords` | Job title / search keywords |
+| `location` | "Remote" or a city |
+| `min_salary_lakhs` | Minimum salary in LPA (Indian market) |
+| `hours_since_posted` | Recency filter (hours) |
+| `exclude_keywords` | Keywords to filter out |
+| `greenhouse_boards` | Company slugs for Greenhouse ATS |
+| `lever_slugs` | Company slugs for Lever ATS |
+| `max_jobs_per_source` | Max jobs to scrape per source |
+| `llm_model` | Ollama model name (e.g. gemma3, llama3) |
+| `resume_path` | Path to your resume/profile text file |
+
+## CLI Overrides
+
+Override any config value for a single run:
 
 ```bash
-# Full options
-uv run python -m src.cli \
-  --keywords "Full Stack Developer" \
-  --location "Remote" \
-  --hours 4 \
-  --startup \
-  --min-lpa 15 \
-  --exclude "php,wordpress,salesforce"
+# Override keywords and hours
+uv run python -m src.cli --hours 2 --keywords "Backend Engineer"
 
-# Last 2 hours only (aggressive)
-uv run python -m src.cli --hours 2 --min-lpa 15 --exclude "php,wordpress"
+# Use a different config file
+uv run python -m src.cli --config ~/job-bot-config.json
 ```
 
 ## CDP Mode (Real Chrome)

@@ -63,7 +63,7 @@ class IndeedSource:
             print(f"    Found {len(cards)} cards")
 
             jobs: list[JobListing] = []
-            for card in cards[:15]:
+            for card in cards[:config.max_jobs_per_source]:
                 try:
                     title_el = await card.query_selector(
                         "h2 a, a.jcs-JobTitle, .jobTitle a, a[id*='job_']"

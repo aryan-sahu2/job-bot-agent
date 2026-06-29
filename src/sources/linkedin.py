@@ -35,7 +35,7 @@ class LinkedInSource:
         cards = await page.query_selector_all(".base-card")
         print(f"    Found {len(cards)} cards")
 
-        for i, card in enumerate(cards[:15]):
+        for i, card in enumerate(cards[:config.max_jobs_per_source]):
             try:
                 title_el = await card.query_selector(".base-search-card__title")
                 company_el = await card.query_selector(".base-search-card__subtitle")

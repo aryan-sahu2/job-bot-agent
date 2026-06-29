@@ -1,0 +1,29 @@
+{
+  "keywords": "Full Stack Engineer",
+  "location": "Remote",
+  "min_salary": null,
+  "min_salary_lakhs": 15.0,
+  "remote_only": true,
+  "experience_level": "mid",
+  "exclude_keywords": [
+    "php",
+    "wordpress",
+    "salesforce",
+    "drupal"
+  ],
+  "hours_since_posted": 4,
+  "startup_only": false,
+  "linkedin_time_filter": "r86400",
+  "linkedin_remote_filter": "2",
+  "linkedin_distance": "25",
+  "naukri_experience": "",
+  "naukri_salary_lakhs": "",
+  "greenhouse_boards": [],
+  "lever_slugs": [],
+  "max_jobs_per_source": 15,
+  "llm_api": "http://localhost:11434/api/generate",
+  "llm_model": "gemma3",
+  "llm_timeout": 90,
+  "output_dir": "output",
+  "resume_path": "resume.txt"
+}

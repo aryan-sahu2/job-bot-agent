@@ -35,7 +35,7 @@ class WellfoundSource:
                 listings = await page.query_selector_all("[data-testid='job-listing']")
 
             if listings:
-                for listing in listings[:20]:
+                for listing in listings[:config.max_jobs_per_source]:
                     try:
                         link_el = await listing.query_selector("a[href*='/jobs/']")
                         if not link_el:
@@ -47,7 +47,7 @@ class WellfoundSource:
                         seen_hrefs.add(href)
 
                         text = await link_el.inner_text()
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
+                        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
                         title = lines[0] if lines else ""
                         company = lines[1] if len(lines) > 1 else ""
 
@@ -74,7 +74,7 @@ class WellfoundSource:
             else:
                 # Fallback: grab every job link on the page
                 all_links = await page.query_selector_all("a[href*='/jobs/']")
-                for link in all_links:
+                for link in all_links[:config.max_jobs_per_source]:
                     try:
                         href = await link.get_attribute("href")
                         if not href or href in seen_hrefs:
@@ -82,7 +82,7 @@ class WellfoundSource:
                         seen_hrefs.add(href)
 
                         text = await link.inner_text()
-                        lines = [l.strip() for l in text.split("\n") if l.strip()]
+                        lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
                         if not lines:
                             continue
 

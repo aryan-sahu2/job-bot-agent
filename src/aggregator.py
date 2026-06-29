@@ -72,22 +72,16 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
         all_jobs.extend(jobs)
         await context.close()
 
-        # Greenhouse — add your target company slugs here
-        greenhouse_boards = [
-            # "stripe", "airbnb", "notion", "figma"
-        ]
-        for board in greenhouse_boards:
+        # Greenhouse
+        for board in config.greenhouse_boards:
             context = await new_stealth_context(browser)
             page = await context.new_page()
             jobs = await GreenhouseSource.scrape(board, page)
             all_jobs.extend(jobs)
             await context.close()
 
-        # Lever — add your target company slugs here
-        lever_slugs = [
-            # "netflix", "spotify", "shopify"
-        ]
-        for slug in lever_slugs:
+        # Lever
+        for slug in config.lever_slugs:
             context = await new_stealth_context(browser)
             page = await context.new_page()
             jobs = await LeverSource.scrape(slug, page)
@@ -162,11 +156,11 @@ async def aggregate(config: SearchConfig, profile: str) -> list[JobListing]:
     return evaluated
 
 
-def save_results(jobs: list[JobListing], prefix: str = ""):
+def save_results(jobs: list[JobListing], config: SearchConfig, prefix: str = ""):
     ts = datetime.now().strftime("%Y%m%d_%H%M")
 
-    json_dir = Path("output/jobs_found")
-    txt_dir = Path("output/jobs_to_apply")
+    json_dir = Path(config.output_dir) / "jobs_found"
+    txt_dir = Path(config.output_dir) / "jobs_to_apply"
     json_dir.mkdir(parents=True, exist_ok=True)
     txt_dir.mkdir(parents=True, exist_ok=True)
 

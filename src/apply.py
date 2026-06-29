@@ -7,14 +7,11 @@ import httpx
 from playwright.async_api import async_playwright
 
 from src.aggregator import STEALTH_SCRIPT
-
-RESUME_PATH = "resume.txt"
-LLM_API = "http://localhost:11434/api/generate"
-LLM_MODEL = "gemma3"
+from src.config import load_config
 
 
-def load_profile():
-    text = Path(RESUME_PATH).read_text()
+def load_profile(resume_path: str = "resume.txt"):
+    text = Path(resume_path).read_text()
     lines = text.strip().split("\n")
     name = lines[0] if lines else "Applicant"
     email = next((line for line in lines if "@" in line), "")
@@ -22,10 +19,14 @@ def load_profile():
     return {"name": name, "email": email, "phone": phone, "raw": text}
 
 
-async def ask_llm(prompt: str) -> str:
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(LLM_API, json={
-            "model": LLM_MODEL,
+async def ask_llm(
+    prompt: str, model: str = "gemma3",
+    api: str = "http://localhost:11434/api/generate",
+    timeout: int = 120,
+) -> str:
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(api, json={
+            "model": model,
             "prompt": prompt,
             "stream": False,
         })
@@ -57,7 +58,7 @@ async def parse_job(page):
     }
 
 
-async def generate_answers(job, profile):
+async def generate_answers(job, profile, config):
     prompt = f"""You are {profile['name']}. Write a brief, professional cover letter for this job:
 
 Company: {job['company']}
@@ -69,7 +70,12 @@ Your profile:
 
 Write 2-3 short paragraphs. Be specific, not generic. Mention relevant skills and experience."""
 
-    cover_letter = await ask_llm(prompt)
+    cover_letter = await ask_llm(
+        prompt,
+        model=config.llm_model,
+        api=config.llm_api,
+        timeout=config.llm_timeout,
+    )
 
     return {
         "first_name": profile["name"].split()[0],
@@ -147,7 +153,7 @@ async def fill_form(page, answers):
     return filled
 
 
-async def apply_to_job(context, url, profile):
+async def apply_to_job(context, url, profile, config):
     print(f"\n{'='*60}")
     print(f"Applying to: {url}")
     print(f"{'='*60}")
@@ -176,7 +182,7 @@ async def apply_to_job(context, url, profile):
         print(f"Job: {job['title']} at {job['company']}")
 
         print("Generating answers...")
-        answers = await generate_answers(job, profile)
+        answers = await generate_answers(job, profile, config)
 
         apply_selectors = [
             "button:has-text('Apply')",
@@ -261,7 +267,12 @@ def main():
     else:
         urls = [arg]
 
-    profile = load_profile()
+    config = load_config()
+    if not Path(config.resume_path).exists():
+        print(f"ERROR: Create {config.resume_path} with your profile first!")
+        sys.exit(1)
+
+    profile = load_profile(config.resume_path)
     print(f"Loaded profile for: {profile['name']}")
 
     async def run():
@@ -291,7 +302,7 @@ def main():
             await context.add_init_script(STEALTH_SCRIPT)
 
             for url in urls:
-                await apply_to_job(context, url, profile)
+                await apply_to_job(context, url, profile, config)
 
             if use_cdp:
                 await browser.close()
