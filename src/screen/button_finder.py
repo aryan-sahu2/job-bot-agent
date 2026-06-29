@@ -97,7 +97,11 @@ class ApplyButtonFinder:
 
         buttons: list[ApplyButton] = []
         self._search_for_buttons(
-            window_element, buttons, depth=0, max_depth=15, keywords=APPLY_KEYWORDS,
+            window_element,
+            buttons,
+            depth=0,
+            max_depth=15,
+            keywords=APPLY_KEYWORDS,
         )
         logger.info("Found %d apply button(s) via accessibility tree", len(buttons))
         return buttons
@@ -127,7 +131,11 @@ class ApplyButtonFinder:
 
         buttons: list[ApplyButton] = []
         self._search_for_buttons(
-            window_element, buttons, depth=0, max_depth=15, keywords=SUBMIT_KEYWORDS,
+            window_element,
+            buttons,
+            depth=0,
+            max_depth=15,
+            keywords=SUBMIT_KEYWORDS,
         )
         logger.info("Found %d submit button(s) via accessibility tree", len(buttons))
         return buttons
@@ -196,9 +204,7 @@ class ApplyButtonFinder:
         except Exception:
             logger.debug("Error searching element at depth %d", depth)
 
-    def _children_have_text(
-        self, element: Any, keywords: list[str], max_check: int = 5
-    ) -> bool:
+    def _children_have_text(self, element: Any, keywords: list[str], max_check: int = 5) -> bool:
         """Quick check if any direct child has matching text."""
         children = self._reader.get_children(element)
         for child in children[:max_check]:
@@ -207,9 +213,7 @@ class ApplyButtonFinder:
                 return True
         return False
 
-    def _record_button(
-        self, element: Any, role: str | None, results: list[ApplyButton]
-    ) -> None:
+    def _record_button(self, element: Any, role: str | None, results: list[ApplyButton]) -> None:
         """Create an ApplyButton and append to results if element has a valid screen position.
 
         Elements without screen coordinates (AXPosition) are invisible/off-screen
@@ -219,9 +223,7 @@ class ApplyButtonFinder:
         pos = self._reader.get_element_position(element)
         size = self._reader.get_element_size(element)
         if not pos or not size or size[0] <= 0 or size[1] <= 0:
-            logger.debug(
-                "Skipping invisible element (role=%s, no valid position/size)", role
-            )
+            logger.debug("Skipping invisible element (role=%s, no valid position/size)", role)
             return
 
         button = ApplyButton(
@@ -242,6 +244,10 @@ class ApplyButtonFinder:
     ) -> bool:
         """Check if an element matches the given keywords.
 
+        Priority: matching keyword wins over skip keyword.
+        This prevents false negatives like "Apply Now (Skip this step)"
+        from being skipped because "skip" appears alongside "apply".
+
         Args:
             element: The element to check.
             text: Pre-computed element text (computed from AXTitle/AXDescription/AXValue).
@@ -255,19 +261,25 @@ class ApplyButtonFinder:
         if keywords is None:
             keywords = APPLY_KEYWORDS
 
-        if any(skip in text for skip in SKIP_KEYWORDS):
-            return False
-
-        if any(keyword in text for keyword in keywords):
-            return True
+        has_match = any(keyword in text for keyword in keywords)
 
         children = self._reader.get_children(element)
         for child in children:
             child_text = self._get_element_text(child)
             if any(keyword in child_text for keyword in keywords):
-                return True
+                has_match = True
+                break
 
-        return False
+        if not has_match:
+            return False
+
+        # Only skip if ALL matching keywords are absent AND skip keywords present
+        if not any(keyword in text for keyword in keywords) and any(
+            skip in text for skip in SKIP_KEYWORDS
+        ):
+            return False
+
+        return True
 
     def click_button(self, button: ApplyButton) -> bool:
         """Click an apply button using a real mouse event at its screen position.
@@ -338,7 +350,8 @@ class ApplyButtonFinder:
             if attempt < max_scrolls - 1:
                 logger.info(
                     "No apply button visible (attempt %d/%d), scrolling down...",
-                    attempt + 1, max_scrolls,
+                    attempt + 1,
+                    max_scrolls,
                 )
                 if not self._reader.scroll_down(window_element):
                     logger.info("Cannot scroll further")
@@ -390,7 +403,8 @@ class ApplyButtonFinder:
             if attempt < max_scrolls - 1:
                 logger.info(
                     "No submit button visible (attempt %d/%d), scrolling down...",
-                    attempt + 1, max_scrolls,
+                    attempt + 1,
+                    max_scrolls,
                 )
                 if not self._reader.scroll_down(window_element):
                     break
@@ -418,7 +432,9 @@ class ApplyButtonFinder:
                 x, y, text = matches[0]
                 logger.info(
                     "OCR found '%s' → clicking at (%.0f, %.0f)",
-                    text.strip(), x, y,
+                    text.strip(),
+                    x,
+                    y,
                 )
                 return self._reader.mouse_click_at(x, y)
         logger.warning("OCR fallback: no apply text found on screen")

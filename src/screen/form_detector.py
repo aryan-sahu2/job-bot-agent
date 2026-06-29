@@ -19,6 +19,19 @@ ROLE_FIELD_MAP = {
     "AXCheckBox": FieldType.CHECKBOX,
     "AXRadioButton": FieldType.RADIO,
     "AXSlider": FieldType.TEXT,
+    "AXSecureTextField": FieldType.TEXT,
+    "AXSearchField": FieldType.TEXT,
+    "AXDateField": FieldType.DATE,
+    "AXDisclosureTriangle": FieldType.SELECT,
+    "AXMenuButton": FieldType.SELECT,
+    "AXIncrementor": FieldType.TEXT,
+    "AXTabGroup": FieldType.SELECT,
+    "AXOutline": FieldType.SELECT,
+    "AXSplitGroup": FieldType.TEXT,
+    "AXValueIndicator": FieldType.TEXT,
+    "AXLevelIndicator": FieldType.TEXT,
+    "AXRatingIndicator": FieldType.TEXT,
+    "AXRelevanceIndicator": FieldType.TEXT,
 }
 
 # Keywords for detecting field types from labels/titles
@@ -42,6 +55,8 @@ STANDARD_FIELD_PATTERNS = {
     "linkedin": ["linkedin", "linkedin url", "linkedin profile"],
     "github": ["github", "github url", "github profile"],
     "website": ["website", "portfolio", "personal website", "url"],
+    "company": ["company", "current company", "employer", "organization"],
+    "position": ["position", "title", "job title", "role", "current position"],
 }
 
 
@@ -114,6 +129,57 @@ class FormDetector:
         except Exception:
             logger.debug("Error searching element at depth %d", depth)
 
+    def _find_label_for_element(self, element: Any) -> str:
+        """Find a descriptive label for a form field from the accessibility tree.
+
+        Web form inputs often lack AXTitle/AXDescription. This method checks
+        in order: AXDescription, AXPlaceholderValue, preceding AXStaticText
+        sibling, ancestor group titles, and AXIdentifier.
+        """
+        placeholder = self._reader.get_attribute(element, "AXPlaceholderValue")
+        if placeholder and str(placeholder).strip():
+            return str(placeholder).strip()
+
+        parent = self._reader.get_parent(element)
+        if parent:
+            children = self._reader.get_children(parent)
+            field_index = None
+            for i, child in enumerate(children):
+                if child == element:
+                    field_index = i
+                    break
+
+            if field_index is not None:
+                for j in range(field_index - 1, -1, -1):
+                    prev = children[j]
+                    role = self._reader.get_attribute(prev, "AXRole")
+                    if role == "AXStaticText":
+                        val = self._reader.get_attribute(prev, "AXValue")
+                        if val and str(val).strip():
+                            return str(val).strip()
+
+                    prev_title = self._reader.get_attribute(prev, "AXTitle")
+                    if prev_title and str(prev_title).strip():
+                        return str(prev_title).strip()
+
+            parent_title = self._reader.get_attribute(parent, "AXTitle")
+            if parent_title and str(parent_title).strip():
+                return str(parent_title).strip()
+
+            current = parent
+            for _ in range(5):
+                ancestor = self._reader.get_parent(current)
+                if ancestor is None:
+                    break
+                role = self._reader.get_attribute(ancestor, "AXRole")
+                if role in ("AXGroup", "AXSection", "AXSplitGroup", "AXTabGroup"):
+                    ancestor_title = self._reader.get_attribute(ancestor, "AXTitle")
+                    if ancestor_title and str(ancestor_title).strip():
+                        return str(ancestor_title).strip()
+                current = ancestor
+
+        return ""
+
     def _create_detected_field(self, element: Any, role: str) -> DetectedField | None:
         """Create a DetectedField from an accessibility element."""
         try:
@@ -122,6 +188,11 @@ class FormDetector:
             value = str(self._reader.get_attribute(element, "AXValue") or "")
             identifier = str(self._reader.get_attribute(element, "AXIdentifier") or "")
             required = bool(self._reader.get_attribute(element, "AXRequired"))
+
+            if not title.strip() and not description.strip():
+                found_label = self._find_label_for_element(element)
+                if found_label:
+                    title = found_label
 
             label_text = f"{title} {description} {identifier}".lower()
 

@@ -183,9 +183,7 @@ class ScreenWorkflow:
         logger.info("Scanning current screen for job information")
         self._current_job = self._parser.parse()
 
-    async def _generate_answers(
-        self, fields: list[DetectedField] | None = None
-    ) -> dict[str, str]:
+    async def _generate_answers(self, fields: list[DetectedField] | None = None) -> dict[str, str]:
         """Generate personalized answers for the detected job and form fields.
 
         Detects whether the page has custom screener questions (e.g. Indeed)
@@ -217,6 +215,7 @@ class ScreenWorkflow:
 
         # Always include profile identity fields
         if profile:
+            answers["resume"] = getattr(profile, "resume_path", "") or ""
             if profile.name:
                 parts = profile.name.split()
                 answers["first_name"] = parts[0]
@@ -226,30 +225,43 @@ class ScreenWorkflow:
             answers["company"] = self._current_job.company or ""
             answers["position"] = self._current_job.title or ""
 
+            # Add URLs from profile (linkedin, github, website)
+            if profile.urls:
+                for url in profile.urls:
+                    lower_url = url.lower()
+                    if "linkedin.com" in lower_url:
+                        answers["linkedin"] = url
+                    elif "github.com" in lower_url:
+                        answers["github"] = url
+                    else:
+                        answers["website"] = answers.get("website") or url
+
         # Check if there are custom textarea/text fields (screener questions)
         custom_fields = [
-            f for f in (fields or [])
+            f
+            for f in (fields or [])
             if f.field_type in (FieldType.TEXTAREA, FieldType.TEXT)
-            and f.title.strip()
+            and (f.title.strip() or f.description.strip())
         ]
 
         if custom_fields:
             logger.info("Generating per-field answers for %d custom field(s)", len(custom_fields))
             try:
                 per_field = await self._answer_generator.generate_for_fields(
-                    job=job, fields=custom_fields, profile=profile,
+                    job=job,
+                    fields=custom_fields,
+                    profile=profile,
                 )
                 if per_field:
                     answers.update(per_field)
-                    logger.info(
-                        "Generated %d field-specific answers", len(per_field)
-                    )
+                    logger.info("Generated %d field-specific answers", len(per_field))
             except Exception:
                 logger.exception("Error generating per-field answers")
 
         try:
             answer_text = await self._answer_generator.generate(
-                job=job, profile=profile,
+                job=job,
+                profile=profile,
             )
             answers["cover_letter"] = answer_text
             answers["why_company"] = answer_text
@@ -314,9 +326,7 @@ class ScreenWorkflow:
                 "You may need to click the apply/continue button manually in your browser."
             )
         else:
-            print(
-                "\nThe form fields have been partially processed."
-            )
+            print("\nThe form fields have been partially processed.")
 
         print("\nOptions:")
         print("  [S] Submit automatically")

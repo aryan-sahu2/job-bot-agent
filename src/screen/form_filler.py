@@ -77,18 +77,28 @@ class FormFiller:
         return success
 
     def _fill_text_field(self, field: DetectedField, value: str) -> bool:
-        """Fill a text input field."""
+        """Fill a text input field.
+
+        Strategy (tried in order):
+        1. Mouse click + keyboard typing — triggers real DOM events in browsers
+        2. AXFocused + keyboard typing — fallback when mouse coords unavailable
+        3. AXValue set — last resort for native apps
+        """
         element = field.element_ref
+        import time
 
-        if self._reader.focus_element(element):
-            if self._reader.set_value(element, value):
-                return True
+        if self._reader.click_element(element):
+            time.sleep(0.15)
+            self._reader.type_text(value)
+            return True
 
-            logger.debug("AXValue set failed, trying keyboard input")
-            self._reader.perform_action(element, "AXPress")
-            import time
+        if self._reader.set_focus(element):
             time.sleep(0.1)
             self._reader.type_text(value)
+            return True
+
+        logger.debug("click and set_focus both failed, trying AXValue fallback")
+        if self._reader.focus_element(element) and self._reader.set_value(element, value):
             return True
 
         return False
@@ -96,16 +106,20 @@ class FormFiller:
     def _fill_textarea(self, field: DetectedField, value: str) -> bool:
         """Fill a text area field."""
         element = field.element_ref
+        import time
 
-        if self._reader.focus_element(element):
-            if self._reader.set_value(element, value):
-                return True
+        if self._reader.click_element(element):
+            time.sleep(0.15)
+            self._reader.type_text(value)
+            return True
 
-            logger.debug("AXValue set failed for textarea, trying keyboard input")
-            self._reader.perform_action(element, "AXPress")
-            import time
+        if self._reader.set_focus(element):
             time.sleep(0.1)
             self._reader.type_text(value)
+            return True
+
+        logger.debug("click and set_focus both failed for textarea, trying AXValue fallback")
+        if self._reader.focus_element(element) and self._reader.set_value(element, value):
             return True
 
         return False
@@ -118,6 +132,7 @@ class FormFiller:
             return False
 
         import time
+
         time.sleep(0.3)
 
         children = self._reader.get_children(element)
@@ -174,7 +189,11 @@ class FormFiller:
         for field in fields:
             value = self._find_value_for_field(field, values)
             if value is None:
-                logger.debug("No value found for field '%s', skipping", field.title)
+                logger.info(
+                    "No value found for field '%s' (type=%s), skipping",
+                    field.title,
+                    field.field_type,
+                )
                 continue
 
             if self.fill_field(field, value):
@@ -194,18 +213,36 @@ class FormFiller:
         field: DetectedField,
         values: dict[str, str],
     ) -> str | None:
-        """Find the appropriate value for a field from the values dict."""
+        """Find the appropriate value for a field from the values dict.
+
+        Matching order:
+        1. Map to standard field name (e.g. "email", "first_name")
+        2. Exact match by title/identifier/description
+        3. Match by field type (e.g. EMAIL → values["email"])
+        """
         standard_name = self._detector.map_to_standard_field(field)
         if standard_name and standard_name in values:
             return values[standard_name]
 
-        if field.title and field.title in values:
-            return values[field.title]
+        norm_values = {k.strip().lower(): v for k, v in values.items()}
 
-        if field.identifier and field.identifier in values:
-            return values[field.identifier]
+        for attr_name in ("title", "identifier", "description"):
+            candidate = getattr(field, attr_name, None)
+            if candidate:
+                key = candidate.strip().lower()
+                if key in norm_values:
+                    return norm_values[key]
 
-        if field.description and field.description in values:
-            return values[field.description]
+        # Fallback: match by field type (handles reclassified types like
+        # EMAIL/PHONE/URL that don't match standard names)
+        type_to_key: dict[FieldType, str] = {
+            FieldType.EMAIL: "email",
+            FieldType.PHONE: "phone",
+            FieldType.URL: "website",
+            FieldType.FILE: "resume",
+        }
+        key = type_to_key.get(field.field_type)
+        if key and key in norm_values:
+            return norm_values[key]
 
         return None

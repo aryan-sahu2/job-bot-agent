@@ -78,8 +78,11 @@ class GlobalHotkeyListener:
             pynput_hotkey: self._on_activate,
         }
 
-        logger.info("Starting global hotkey listener: %s (pynput format: %s)",
-                     self._hotkey_combo, pynput_hotkey)
+        logger.info(
+            "Starting global hotkey listener: %s (pynput format: %s)",
+            self._hotkey_combo,
+            pynput_hotkey,
+        )
         self._listener = keyboard.GlobalHotKeys(hotkey_map)
         self._is_running = True
         self._listener.start()

@@ -10,49 +10,121 @@ from src.config.loader import BrowserConfig
 logger = logging.getLogger("job-bot.browser")
 
 STEALTH_SCRIPT = """
-// Remove webdriver flag
-Object.defineProperty(navigator, 'webdriver', {
-    get: () => false
-});
+// Override webdriver flag at the top level
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
-// Add chrome runtime
-window.chrome = {
-    runtime: {},
-    loadTimes: function() {},
-    csi: function() {},
-    app: {}
+// Override navigator.webdriver in Worker/ServiceWorker globals
+if (typeof WorkerGlobalScope !== 'undefined') {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+}
+
+// Build a convincing chrome.runtime with proper structure
+const makeChrome = () => {
+    const runtime = {
+        id: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
+        getManifest: () => ({
+            name: 'Chrome',
+            version: '134.0.6998.165',
+            manifest_version: 3,
+        }),
+        connect: () => null,
+        sendMessage: () => null,
+    };
+    return {
+        runtime: runtime,
+        loadTimes: () => ({
+            requestTime: performance.now() / 1000,
+            startLoadTime: performance.now() / 1000,
+            commitLoadTime: (performance.now() + 100) / 1000,
+            finishDocumentLoadTime: (performance.now() + 200) / 1000,
+            finishLoadTime: (performance.now() + 500) / 1000,
+            firstPaintTime: (performance.now() + 100) / 1000,
+            firstPaintAfterLoadTime: (performance.now() + 600) / 1000,
+            navigationType: 'Other',
+            wasFetchedViaSpdy: true,
+            wasNpnNegotiated: true,
+            npnNegotiatedProtocol: 'h2',
+            wasAlternateProtocolAvailable: false,
+            connectionInfo: 'http/2',
+        }),
+        csi: () => ({
+            startE: performance.now(),
+            onloadT: performance.now() + 200,
+            onT: performance.now() + 100,
+            pageT: 'new',
+            tran: Math.random() * 1000000,
+        }),
+        app: { isInstalled: false, InstallState: 'notinstalled', RunningState: 'stopped' },
+    };
 };
 
-// Add realistic plugins
+if (!window.chrome) {
+    window.chrome = makeChrome();
+} else {
+    const existing = window.chrome;
+    const newChrome = makeChrome();
+    if (!existing.runtime) existing.runtime = newChrome.runtime;
+    if (!existing.loadTimes) existing.loadTimes = newChrome.loadTimes;
+    if (!existing.csi) existing.csi = newChrome.csi;
+    if (!existing.app) existing.app = newChrome.app;
+}
+
+// Plugins — return a realistic array
 Object.defineProperty(navigator, 'plugins', {
     get: () => {
-        const plugins = [
-            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
-            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
-            { name: 'Native Client', filename: 'internal-nacl-plugin' }
+        const p = [
+            { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', desc: 'PDF' },
+            { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', desc: '' },
+            { name: 'Native Client', filename: 'internal-nacl-plugin', desc: '' },
         ];
-        plugins.length = 3;
-        return plugins;
+        p.length = 3;
+        p.item = i => p[i] || null;
+        p.namedItem = n => p.find(x => x.name === n) || null;
+        p.refresh = () => {};
+        return p;
     }
 });
 
-// Add languages
-Object.defineProperty(navigator, 'languages', {
-    get: () => ['en-US', 'en']
-});
+// Languages
+Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
 
-// Override permissions query
+// Permissions query — override to show notifications as prompt (not default deny)
 const originalQuery = window.navigator.permissions.query;
 window.navigator.permissions.query = (parameters) => (
-    parameters.name === 'notifications' ?
-        Promise.resolve({ state: Notification.permission }) :
-        originalQuery(parameters)
+    parameters.name === 'notifications'
+        ? Promise.resolve({ state: 'prompt', onchange: null })
+        : originalQuery(parameters)
 );
 
-// Remove automation indicators
-delete window.cdc_adoQpoasnfa76pfcZLmcfl_Array;
-delete window.cdc_adoQpoasnfa76pfcZLmcfl_Promise;
-delete window.cdc_adoQpoasnfa76pfcZLmcfl_Symbol;
+// Platform consistency
+Object.defineProperty(navigator, 'platform', { get: () => 'MacIntel' });
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+// Remove common Playwright/CDP automation indicators
+const deleteProps = [
+    'cdc_adoQpoasnfa76pfcZLmcfl_Array',
+    'cdc_adoQpoasnfa76pfcZLmcfl_Promise',
+    'cdc_adoQpoasnfa76pfcZLmcfl_Symbol',
+    '_cdc_adoQpoasnfa76pfcZLmcfl_Array',
+    '_cdc_adoQpoasnfa76pfcZLmcfl_Promise',
+    '_cdc_adoQpoasnfa76pfcZLmcfl_Symbol',
+];
+deleteProps.forEach(p => {
+    try { delete window[p]; } catch (_) {}
+});
+
+// Override stack trace to hide injected script traces
+const origPrepareStackTrace = Error.prepareStackTrace;
+Error.prepareStackTrace = (err, stack) => {
+    const filtered = stack.filter(callSite => {
+        const fileName = callSite.getFileName() || '';
+        return !fileName.includes('__playwright') && !fileName.includes('__pw');
+    });
+    return origPrepareStackTrace
+        ? origPrepareStackTrace(err, filtered)
+        : filtered.map(cs => cs.toString()).join('\\n');
+};
 """
 
 
@@ -123,10 +195,17 @@ class BrowserEngine:
             await self._playwright.stop()
             self._playwright = None
 
-    async def navigate(self, url: str) -> None:
+    async def navigate(
+        self, url: str, wait_until: str | None = None, wait_for_selector: str | None = None
+    ) -> None:
         page = self._require_page()
         try:
-            await page.goto(url, timeout=self._config.timeout, wait_until="domcontentloaded")
+            wait_arg = wait_until or "networkidle"
+            await page.goto(url, timeout=self._config.timeout, wait_until=wait_arg)
+            if wait_for_selector:
+                await page.wait_for_selector(
+                    wait_for_selector, timeout=self._config.timeout
+                )
         except Exception as e:
             raise BrowserError(f"Failed to navigate to {url}: {e}") from e
 
@@ -214,7 +293,7 @@ class BrowserEngine:
     ) -> bool:
         page = self._require_page()
         try:
-            await page.goto(url, timeout=self._config.timeout, wait_until="domcontentloaded")
+            await page.goto(url, timeout=self._config.timeout, wait_until="networkidle")
 
             try:
                 await page.wait_for_selector(logged_in_indicator, timeout=5000)

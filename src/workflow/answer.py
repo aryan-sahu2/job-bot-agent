@@ -29,9 +29,7 @@ class AnswerGenerator:
         profile: Profile | None = None,
     ) -> str:
         if profile is None:
-            profile = self._profile_manager.load_profile_from_resume(
-                self._get_resume_path()
-            )
+            profile = self._profile_manager.load_profile_from_resume(self._get_resume_path())
 
         variables = self._build_variables(job, profile)
         answer = await self._llm.generate_text(
@@ -68,9 +66,7 @@ class AnswerGenerator:
             Dict mapping field titles to generated answers.
         """
         if profile is None:
-            profile = self._profile_manager.load_profile_from_resume(
-                self._get_resume_path()
-            )
+            profile = self._profile_manager.load_profile_from_resume(self._get_resume_path())
 
         answers: dict[str, str] = {}
         text_fields: list[str] = []
@@ -94,9 +90,7 @@ class AnswerGenerator:
                 for question, answer in parsed.items():
                     if answer and isinstance(answer, str):
                         answers[question.strip()] = answer.strip()
-                logger.info(
-                    "Generated %d field-specific answers", len(answers)
-                )
+                logger.info("Generated %d field-specific answers", len(answers))
         except Exception:
             logger.exception("Error generating field answers")
 
@@ -141,8 +135,7 @@ class AnswerGenerator:
             for e in profile.experience
         )
         education_str = "; ".join(
-            f"{e.degree} in {e.field or ''} at {e.institution}"
-            for e in profile.education
+            f"{e.degree} in {e.field or ''} at {e.institution}" for e in profile.education
         )
         return {
             "company": job.company,

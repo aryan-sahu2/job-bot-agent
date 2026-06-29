@@ -37,28 +37,44 @@ class TestFormFiller:
             field_type=FieldType.EMAIL,
             element_ref=MagicMock(),
         )
-        mock_reader.focus_element.return_value = True
-        mock_reader.set_value.return_value = True
+        mock_reader.click_element.return_value = True
 
         result = filler.fill_field(field, "test@example.com")
         assert result is True
-        mock_reader.focus_element.assert_called_once_with(field.element_ref)
-        mock_reader.set_value.assert_called_once_with(field.element_ref, "test@example.com")
+        mock_reader.click_element.assert_called_once_with(field.element_ref)
+        mock_reader.type_text.assert_called_once_with("test@example.com")
 
-    def test_fill_text_field_fallback_to_keyboard(self, filler, mock_reader):
+    def test_fill_text_field_fallback_to_set_focus(self, filler, mock_reader):
         field = DetectedField(
             role="AXTextField",
             title="Email",
             field_type=FieldType.TEXT,
             element_ref=MagicMock(),
         )
-        mock_reader.focus_element.return_value = True
-        mock_reader.set_value.return_value = False
+        mock_reader.click_element.return_value = False
+        mock_reader.set_focus.return_value = True
 
         result = filler.fill_field(field, "test value")
         assert result is True
-        mock_reader.perform_action.assert_called_once_with(field.element_ref, "AXPress")
+        mock_reader.set_focus.assert_called_once_with(field.element_ref)
         mock_reader.type_text.assert_called_once_with("test value")
+
+    def test_fill_text_field_fallback_to_axvalue(self, filler, mock_reader):
+        field = DetectedField(
+            role="AXTextField",
+            title="Email",
+            field_type=FieldType.TEXT,
+            element_ref=MagicMock(),
+        )
+        mock_reader.click_element.return_value = False
+        mock_reader.set_focus.return_value = False
+        mock_reader.focus_element.return_value = True
+        mock_reader.set_value.return_value = True
+
+        result = filler.fill_field(field, "test value")
+        assert result is True
+        mock_reader.focus_element.assert_called_once_with(field.element_ref)
+        mock_reader.set_value.assert_called_once_with(field.element_ref, "test value")
 
     def test_fill_textarea(self, filler, mock_reader):
         field = DetectedField(
@@ -67,11 +83,12 @@ class TestFormFiller:
             field_type=FieldType.TEXTAREA,
             element_ref=MagicMock(),
         )
-        mock_reader.focus_element.return_value = True
-        mock_reader.set_value.return_value = True
+        mock_reader.click_element.return_value = True
 
         result = filler.fill_field(field, "My cover letter text")
         assert result is True
+        mock_reader.click_element.assert_called_once_with(field.element_ref)
+        mock_reader.type_text.assert_called_once_with("My cover letter text")
 
     def test_fill_checkbox_checked(self, filler, mock_reader):
         field = DetectedField(
@@ -152,22 +169,73 @@ class TestFormFiller:
         result = filler._find_value_for_field(field, values)
         assert result is None
 
+    def test_find_value_for_field_by_type_email(self, filler, mock_detector):
+        field = DetectedField(
+            role="AXTextField",
+            title="Enter your email address",
+            field_type=FieldType.EMAIL,
+        )
+        mock_detector.map_to_standard_field.return_value = None
+        values = {"email": "test@example.com"}
+
+        result = filler._find_value_for_field(field, values)
+        assert result == "test@example.com"
+
+    def test_find_value_for_field_by_type_phone(self, filler, mock_detector):
+        field = DetectedField(
+            role="AXTextField",
+            title="Contact number",
+            field_type=FieldType.PHONE,
+        )
+        mock_detector.map_to_standard_field.return_value = None
+        values = {"phone": "123-456-7890"}
+
+        result = filler._find_value_for_field(field, values)
+        assert result == "123-456-7890"
+
+    def test_find_value_for_field_by_type_website(self, filler, mock_detector):
+        field = DetectedField(
+            role="AXTextField",
+            title="Portfolio URL",
+            field_type=FieldType.URL,
+        )
+        mock_detector.map_to_standard_field.return_value = None
+        values = {"website": "https://example.com"}
+
+        result = filler._find_value_for_field(field, values)
+        assert result == "https://example.com"
+
+    def test_find_value_for_field_by_type_resume(self, filler, mock_detector):
+        field = DetectedField(
+            role="AXTextField",
+            title="Upload CV",
+            field_type=FieldType.FILE,
+        )
+        mock_detector.map_to_standard_field.return_value = None
+        values = {"resume": "/path/to/resume.pdf"}
+
+        result = filler._find_value_for_field(field, values)
+        assert result == "/path/to/resume.pdf"
+
     def test_fill_all_fields(self, filler, mock_detector):
         fields = [
             DetectedField(
-                role="AXTextField", title="Email",
-                field_type=FieldType.EMAIL, element_ref=MagicMock()
+                role="AXTextField",
+                title="Email",
+                field_type=FieldType.EMAIL,
+                element_ref=MagicMock(),
             ),
             DetectedField(
-                role="AXTextField", title="Phone",
-                field_type=FieldType.PHONE, element_ref=MagicMock()
+                role="AXTextField",
+                title="Phone",
+                field_type=FieldType.PHONE,
+                element_ref=MagicMock(),
             ),
         ]
         mock_detector.map_to_standard_field.side_effect = ["email", "phone"]
         values = {"email": "test@example.com", "phone": "123-456-7890"}
 
-        filler._reader.focus_element.return_value = True
-        filler._reader.set_value.return_value = True
+        filler._reader.click_element.return_value = True
 
         success, fail = filler.fill_all_fields(fields, values)
         assert success == 2

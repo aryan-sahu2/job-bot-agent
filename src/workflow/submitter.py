@@ -41,8 +41,7 @@ class Submitter:
 
         if not job.apply_url:
             raise SubmissionError(
-                f"Cannot submit application {application.id}: "
-                f"job {job.id} has no apply URL"
+                f"Cannot submit application {application.id}: job {job.id} has no apply URL"
             )
 
         await self._browser.navigate(job.apply_url)

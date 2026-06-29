@@ -67,17 +67,17 @@ class ReviewWorkflow:
                 continue
 
     def _show_review(self, job: Job, answers: dict[str, str]) -> None:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Review: {job.title} at {job.company}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         for key, value in answers.items():
             print(f"\n--- {key} ---")
             print(value)
 
     def _prompt_action(self) -> str:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         choice = input("[A]pprove, [E]dit, [R]ewrite, [C]ancel: ").strip().lower()
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
         if choice in ("a", "approve"):
             return "approve"
         if choice in ("c", "cancel"):

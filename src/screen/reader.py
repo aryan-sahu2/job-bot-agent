@@ -46,8 +46,7 @@ class ScreenReader:
             import Quartz
 
             window_list = Quartz.CGWindowListCopyWindowInfo(
-                Quartz.kCGWindowListOptionOnScreenOnly
-                | Quartz.kCGWindowListExcludeDesktopElements,
+                Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
                 Quartz.kCGNullWindowID,
             )
             for window in window_list:
@@ -141,6 +140,16 @@ class ScreenReader:
     def get_children(self, element: Any) -> list[Any]:
         """Get the direct children of an accessibility element."""
         return self._get_children(element)
+
+    def get_parent(self, element: Any) -> Any | None:
+        """Get the parent of an accessibility element."""
+        try:
+            error, value = app_services.AXUIElementCopyAttributeValue(element, "AXParent", None)
+            if error == 0:
+                return value
+        except Exception:
+            pass
+        return None
 
     def _get_children(self, element: Any) -> list[Any]:
         """Get children of an accessibility element."""
@@ -239,9 +248,7 @@ class ScreenReader:
             (x, y) tuple in screen coordinates, or None if unavailable.
         """
         try:
-            error, value = app_services.AXUIElementCopyAttributeValue(
-                element, "AXPosition", None
-            )
+            error, value = app_services.AXUIElementCopyAttributeValue(element, "AXPosition", None)
             if error == 0 and value:
                 return (value.x, value.y)
         except Exception:
@@ -255,9 +262,7 @@ class ScreenReader:
             (width, height) tuple, or None if unavailable.
         """
         try:
-            error, value = app_services.AXUIElementCopyAttributeValue(
-                element, "AXSize", None
-            )
+            error, value = app_services.AXUIElementCopyAttributeValue(element, "AXSize", None)
             if error == 0 and value:
                 return (value.width, value.height)
         except Exception:
@@ -267,18 +272,21 @@ class ScreenReader:
     def mouse_click_at(self, x: float, y: float) -> bool:
         """Perform a real mouse click at the given screen coordinates.
 
-        Uses CGEvent to simulate a genuine mouse click that browsers
-        will respond to, unlike AXPress which browsers often ignore.
+        Moves the cursor to the position first, then clicks. This is
+        critical for web browsers (especially Chromium-based ones like
+        Brave) that track mouse position and may ignore clicks without
+        a preceding move event.
         """
         try:
             import Quartz
 
+            self.move_mouse_to(x, y)
+            time.sleep(0.05)
+
             click_down = Quartz.CGEventCreateMouseEvent(
                 None, Quartz.kCGEventLeftMouseDown, (x, y), 0
             )
-            click_up = Quartz.CGEventCreateMouseEvent(
-                None, Quartz.kCGEventLeftMouseUp, (x, y), 0
-            )
+            click_up = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventLeftMouseUp, (x, y), 0)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, click_down)
             time.sleep(0.05)
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, click_up)
@@ -316,6 +324,36 @@ class ScreenReader:
     def focus_element(self, element: Any) -> bool:
         """Bring focus to an element."""
         return self.perform_action(element, "AXRaise")
+
+    def set_focus(self, element: Any) -> bool:
+        """Set keyboard focus to an element by setting AXFocused attribute.
+
+        This gives the element keyboard focus without requiring mouse
+        coordinates, which is more reliable for web content where
+        AXPosition may be viewport-relative.
+        """
+        try:
+            error = app_services.AXUIElementSetAttributeValue(element, "AXFocused", True)
+            if error == 0:
+                return True
+            logger.debug("Failed to set AXFocused, error code: %d", error)
+            return False
+        except Exception:
+            logger.exception("Exception setting AXFocused")
+            return False
+
+    def move_mouse_to(self, x: float, y: float) -> None:
+        """Move the mouse cursor to screen coordinates using a CGEvent.
+
+        Browsers respond more reliably to clicks preceded by a mouse move.
+        """
+        try:
+            import Quartz
+
+            move_event = Quartz.CGEventCreateMouseEvent(None, Quartz.kCGEventMouseMoved, (x, y), 0)
+            Quartz.CGEventPost(Quartz.kCGHIDEventTap, move_event)
+        except Exception:
+            logger.debug("Could not move mouse to (%f, %f)", x, y)
 
     def screenshot_window(self, window_element: Any | None = None) -> Any | None:
         """Capture the focused window as a CGImage for OCR processing.
@@ -376,9 +414,7 @@ class ScreenReader:
             if win_pos is None:
                 win_pos = (0, 0)
 
-            handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(
-                cg_image, None
-            )
+            handler = Vision.VNImageRequestHandler.alloc().initWithCGImage_options_(cg_image, None)
             request = Vision.VNRecognizeTextRequest.alloc().init()
             request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelAccurate)
 

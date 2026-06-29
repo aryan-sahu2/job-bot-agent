@@ -252,9 +252,20 @@ class JobDescriptionParser:
         if len(text) > 100:
             return False
         title_keywords = [
-            "engineer", "developer", "manager", "designer", "analyst",
-            "scientist", "architect", "lead", "director", "intern",
-            "specialist", "coordinator", "consultant", "associate",
+            "engineer",
+            "developer",
+            "manager",
+            "designer",
+            "analyst",
+            "scientist",
+            "architect",
+            "lead",
+            "director",
+            "intern",
+            "specialist",
+            "coordinator",
+            "consultant",
+            "associate",
         ]
         return any(kw in text.lower() for kw in title_keywords)
 
@@ -265,8 +276,19 @@ class JobDescriptionParser:
         if text[0].isdigit():
             return False
         skip_words = [
-            "apply", "save", "share", "sign", "log", "back", "home",
-            "brave", "chrome", "safari", "firefox", "edge", "opera",
+            "apply",
+            "save",
+            "share",
+            "sign",
+            "log",
+            "back",
+            "home",
+            "brave",
+            "chrome",
+            "safari",
+            "firefox",
+            "edge",
+            "opera",
         ]
         if text.lower() in skip_words:
             return False
@@ -275,8 +297,13 @@ class JobDescriptionParser:
     def _looks_like_location(self, text: str) -> bool:
         """Heuristic to check if text looks like a location."""
         location_keywords = [
-            "remote", "hybrid", "onsite", "on-site",
-            "full-time", "part-time", "contract",
+            "remote",
+            "hybrid",
+            "onsite",
+            "on-site",
+            "full-time",
+            "part-time",
+            "contract",
         ]
         if any(kw in text.lower() for kw in location_keywords):
             return True
