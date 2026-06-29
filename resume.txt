@@ -1,23 +1,36 @@
-Alex Developer
-alex@example.com
-555-0001
+Aryan Sahu
+aryanwin0609@gmail.com
++91 7058602394
 
-Full-stack software engineer with 6 years of experience building web applications with Python and TypeScript.
+Full Stack Developer with 3+ years of production experience building and shipping web applications at scale. Delivered features for enterprise clients (Vodafone India, Bank of Maharashtra) supporting 10M+ daily banking transactions; currently architecting production Next.js systems for a Dubai-based startup. Strong end-to-end ownership from React/Next.js frontends and Node.js API design to PostgreSQL schema architecture and AWS/Nginx production deployments.
 
-Senior Software Engineer at TechStart Inc (2021 - Present)
-- Built REST APIs with FastAPI and PostgreSQL
-- Led frontend migration from Angular to React
-- Reduced CI pipeline time by 40%
+Full Stack Developer at Infravue Technologies (July 2025 - Present)
+- Architected and deployed production Next.js, Node.js and Python backend applications with PM2/Nginx across multiple subdomains, achieving zero-downtime deployments
+- Built Cloudflare Workers backend for serverless form processing, maintaining legacy infrastructure in parallel
+- Migrated legacy HTML/CSS/Three.js codebase to Next.js, reducing maintenance overhead by 40% while enhancing 3D animation performance
+- Configured PM2 automated health checks and service restarts, improving system reliability during infrastructure failures
+- Accelerated feature delivery by 25% by integrating AI-assisted development workflows (Claude, ChatGPT) across engineering processes
+- Integrated CI/CD pipelines with automated tar-based backup of existing files prior to SCP deployment, enabling safe rollbacks
 
-Software Engineer at WebCo (2019 - 2021)
-- Developed e-commerce platform with Django
-- Implemented Stripe payment integration
-- Wrote automated test suite with 90% coverage
+Full Stack Developer (Co-Founder) at Kangagigs (March 2025 - July 2025)
+- Architected and shipped a full-stack job discovery platform (React, Node.js, PostgreSQL, Prisma) with JWT-secured REST APIs, independently deployed on AWS EC2
+- Scaled to 500+ registered users; led 3 UI/UX iterations reducing page load time by 35%
+- Owned full production infrastructure: Nginx reverse proxy configuration, PM2 process management, and AWS EC2 provisioning
+- Built employer and candidate flows end-to-end: job posting, search/filtering, resume uploads, and authentication
 
-Junior Developer at DevShop (2018 - 2019)
-- Maintained legacy PHP applications
-- Built internal tools with Python and Flask
+Application Engineer at Newgen Software Technologies (February 2023 - March 2025)
+- Delivered production features for enterprise clients (Vodafone India, Bank of Maharashtra) in Java and JavaScript, supporting systems processing 10M+ daily banking transactions
+- Engineered Oracle-to-SAP data integration pipelines with 99.9% data accuracy across critical financial business processes
+- Reduced batch query processing time by 30% through query restructuring, indexing strategy, and execution plan analysis
 
-BS Computer Science at State University (2014 - 2018)
+Bachelor of Engineering in Electronics and Telecommunication, D. Y. Patil College of Engineering, 8.67 CGPA
 
-Skills: Python, TypeScript, React, FastAPI, Django, PostgreSQL, AWS, Docker, Git
+Skills: React, Next.js, TypeScript, Tailwind CSS, Redux, Framer Motion, GSAP, Three.js, Node.js, Express.js, NestJS, REST APIs, JWT, PostgreSQL, Prisma, MongoDB, AWS EC2, Docker, Nginx, PM2, Cloudflare Workers, Linux, Java
+
+Projects:
+- ICCS – Business Management Platform: Full-stack Next.js/NestJS/PostgreSQL platform with 16-table schema for service tickets, invoicing, inventory, and AMC contracts
+- Agency Site Recreations (ExoApe, Refokus, Obys): Pixel-perfect animated marketing sites using React, GSAP, Framer Motion, and ScrollTrigger
+
+LinkedIn: https://www.linkedin.com/in/aryan-sahu
+GitHub: https://github.com/aryan-sahu2
+Portfolio: https://dev-portfolio-4d2.pages.dev/
