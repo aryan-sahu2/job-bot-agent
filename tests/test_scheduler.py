@@ -58,7 +58,8 @@ def _make_db() -> Database:
 def _make_evaluator(evaluation: Evaluation | None = None) -> MagicMock:
     evaluator = MagicMock()
     evaluator.evaluate = AsyncMock(
-        return_value=evaluation or Evaluation(
+        return_value=evaluation
+        or Evaluation(
             job_id="",
             match_score=80,
             strengths=["Good fit"],

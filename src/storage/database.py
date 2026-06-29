@@ -125,18 +125,14 @@ class Database:
 
     def get_application(self, app_id: str) -> Application | None:
         with self.get_connection() as conn:
-            row = conn.execute(
-                "SELECT * FROM applications WHERE id = ?", (app_id,)
-            ).fetchone()
+            row = conn.execute("SELECT * FROM applications WHERE id = ?", (app_id,)).fetchone()
         if row is None:
             return None
         return self._row_to_application(row)
 
     def list_applications(self) -> list[Application]:
         with self.get_connection() as conn:
-            rows = conn.execute(
-                "SELECT * FROM applications ORDER BY created_at DESC"
-            ).fetchall()
+            rows = conn.execute("SELECT * FROM applications ORDER BY created_at DESC").fetchall()
         return [self._row_to_application(r) for r in rows]
 
     def update_application_status(self, app_id: str, status: str) -> None:

@@ -5,5 +5,4 @@ from src.models.job import Job
 
 class Source(ABC):
     @abstractmethod
-    async def discover(self) -> list[Job]:
-        ...
+    async def discover(self) -> list[Job]: ...

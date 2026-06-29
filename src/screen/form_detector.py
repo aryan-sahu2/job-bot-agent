@@ -103,9 +103,7 @@ class FormDetector:
                 return text.strip() if text else ""
 
         # Try parent label
-        label_text = await element.evaluate(
-            "el => el.closest('label')?.textContent?.trim() || ''"
-        )
+        label_text = await element.evaluate("el => el.closest('label')?.textContent?.trim() || ''")
         if label_text:
             return label_text
 

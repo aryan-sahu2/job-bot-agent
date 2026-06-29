@@ -203,9 +203,7 @@ class BrowserEngine:
             wait_arg = wait_until or "networkidle"
             await page.goto(url, timeout=self._config.timeout, wait_until=wait_arg)
             if wait_for_selector:
-                await page.wait_for_selector(
-                    wait_for_selector, timeout=self._config.timeout
-                )
+                await page.wait_for_selector(wait_for_selector, timeout=self._config.timeout)
         except Exception as e:
             raise BrowserError(f"Failed to navigate to {url}: {e}") from e
 

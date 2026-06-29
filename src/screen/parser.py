@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
 
 from src.screen.models import ScreenJob
 from src.screen.reader import ScreenReader
@@ -73,9 +72,13 @@ class JobDescriptionParser:
         site = self._detect_site(url)
 
         title = await self._extract(site, "title") or self._extract_title_heuristic(text, html)
-        company = await self._extract(site, "company") or self._extract_company_heuristic(text, html)
+        company = await self._extract(site, "company") or self._extract_company_heuristic(
+            text, html
+        )
         location = await self._extract(site, "location") or self._extract_location_heuristic(text)
-        description = await self._extract(site, "description") or self._extract_description_heuristic(text, html)
+        description = await self._extract(
+            site, "description"
+        ) or self._extract_description_heuristic(text, html)
 
         return ScreenJob(
             title=title or "",
@@ -121,12 +124,35 @@ class JobDescriptionParser:
         m = re.search(r"<h1[^>]*>(.*?)</h1>", html, re.I | re.S)
         if m:
             title = re.sub(r"<[^>]+>", "", m.group(1)).strip()
-            if len(title) < 100 and any(k in title.lower() for k in ["engineer", "developer", "manager", "designer", "analyst", "scientist", "lead", "director"]):
+            if len(title) < 100 and any(
+                k in title.lower()
+                for k in [
+                    "engineer",
+                    "developer",
+                    "manager",
+                    "designer",
+                    "analyst",
+                    "scientist",
+                    "lead",
+                    "director",
+                ]
+            ):
                 return title
         # First substantial line
         for line in text.split("\n")[:10]:
             line = line.strip()
-            if 10 < len(line) < 100 and any(k in line.lower() for k in ["engineer", "developer", "manager", "designer", "lead", "director", "specialist"]):
+            if 10 < len(line) < 100 and any(
+                k in line.lower()
+                for k in [
+                    "engineer",
+                    "developer",
+                    "manager",
+                    "designer",
+                    "lead",
+                    "director",
+                    "specialist",
+                ]
+            ):
                 return line
         return None
 
@@ -150,7 +176,18 @@ class JobDescriptionParser:
     def _extract_location_heuristic(self, text: str) -> str | None:
         for line in text.split("\n")[:30]:
             line = line.strip()
-            if any(k in line.lower() for k in ["remote", "hybrid", "onsite", "on-site", "full-time", "part-time", "contract"]):
+            if any(
+                k in line.lower()
+                for k in [
+                    "remote",
+                    "hybrid",
+                    "onsite",
+                    "on-site",
+                    "full-time",
+                    "part-time",
+                    "contract",
+                ]
+            ):
                 return line
             if "," in line and len(line) < 60 and not line.startswith("http"):
                 # City, State/Country pattern
@@ -178,7 +215,7 @@ class JobDescriptionParser:
             return max(chunks, key=len)
 
         # Fallback: body text minus first/last few lines
-        lines = [l.strip() for l in lines if l.strip()]
+        lines = [line.strip() for line in lines if line.strip()]
         if len(lines) > 10:
             return "\n".join(lines[3:-3])
         return "\n".join(lines)
@@ -187,14 +224,30 @@ class JobDescriptionParser:
         reqs = []
         lines = text.split("\n")
         in_req = False
-        req_headers = ["requirements", "qualifications", "what we're looking for", "what you need", "must have"]
+        req_headers = [
+            "requirements",
+            "qualifications",
+            "what we're looking for",
+            "what you need",
+            "must have",
+        ]
         for line in lines:
             low = line.lower().strip()
             if any(h in low for h in req_headers):
                 in_req = True
                 continue
             if in_req:
-                if any(skip in low for skip in ["about us", "benefits", "perks", "salary", "compensation", "how to apply"]):
+                if any(
+                    skip in low
+                    for skip in [
+                        "about us",
+                        "benefits",
+                        "perks",
+                        "salary",
+                        "compensation",
+                        "how to apply",
+                    ]
+                ):
                     if not low.startswith(("•", "-", "*")):
                         in_req = False
                         continue

@@ -25,9 +25,7 @@ class TestBrowserSelectOption:
         async with BrowserEngine(config) as engine:
             await engine.navigate(f"data:text/html,{html}")
             await engine.select_option("#test", "Option B")
-            result = await engine.evaluate(
-                "document.querySelector('#test').value"
-            )
+            result = await engine.evaluate("document.querySelector('#test').value")
             assert result == "b"
 
     @pytest.mark.asyncio
@@ -41,30 +39,20 @@ class TestBrowserSelectOption:
 class TestBrowserSetChecked:
     @pytest.mark.asyncio
     async def test_check_checkbox(self, config: BrowserConfig):
-        html = (
-            "<html><body><input type='checkbox' id='test'>"
-            "</body></html>"
-        )
+        html = "<html><body><input type='checkbox' id='test'></body></html>"
         async with BrowserEngine(config) as engine:
             await engine.navigate(f"data:text/html,{html}")
             await engine.set_checked("#test", True)
-            result = await engine.evaluate(
-                "document.querySelector('#test').checked"
-            )
+            result = await engine.evaluate("document.querySelector('#test').checked")
             assert result is True
 
     @pytest.mark.asyncio
     async def test_uncheck_checkbox(self, config: BrowserConfig):
-        html = (
-            "<html><body><input type='checkbox' id='test' checked>"
-            "</body></html>"
-        )
+        html = "<html><body><input type='checkbox' id='test' checked></body></html>"
         async with BrowserEngine(config) as engine:
             await engine.navigate(f"data:text/html,{html}")
             await engine.set_checked("#test", False)
-            result = await engine.evaluate(
-                "document.querySelector('#test').checked"
-            )
+            result = await engine.evaluate("document.querySelector('#test').checked")
             assert result is False
 
     @pytest.mark.asyncio

@@ -64,9 +64,7 @@ class TestSubmitter:
         db.save_application(approved_app)
         submitter = Submitter(db, mock_browser, mock_form_filler)
 
-        await submitter.submit(
-            approved_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR
-        )
+        await submitter.submit(approved_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR)
 
         mock_browser.navigate.assert_awaited_once_with(SAMPLE_JOB.apply_url)
         mock_form_filler.fill_fields.assert_awaited_once_with(SAMPLE_FORM_FIELDS)
@@ -83,9 +81,7 @@ class TestSubmitter:
         db.save_application(approved_app)
         submitter = Submitter(db, mock_browser, mock_form_filler)
 
-        await submitter.submit(
-            approved_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR
-        )
+        await submitter.submit(approved_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR)
 
         retrieved = db.get_application(approved_app.id)
         assert retrieved is not None
@@ -103,9 +99,7 @@ class TestSubmitter:
         submitter = Submitter(db, mock_browser, mock_form_filler)
 
         with pytest.raises(SubmissionError, match="status is 'draft'"):
-            await submitter.submit(
-                draft_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR
-            )
+            await submitter.submit(draft_app, SAMPLE_JOB, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR)
 
         mock_browser.navigate.assert_not_called()
         mock_browser.click.assert_not_called()
@@ -129,9 +123,7 @@ class TestSubmitter:
         submitter = Submitter(db, mock_browser, mock_form_filler)
 
         with pytest.raises(SubmissionError, match="no apply URL"):
-            await submitter.submit(
-                approved_app, job_no_url, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR
-            )
+            await submitter.submit(approved_app, job_no_url, SAMPLE_FORM_FIELDS, SUBMIT_SELECTOR)
 
         mock_browser.navigate.assert_not_called()
         mock_browser.click.assert_not_called()

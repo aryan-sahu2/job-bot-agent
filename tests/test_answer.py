@@ -109,8 +109,7 @@ class TestAnswerGenerator:
         assert variables["company"] == "Tech Corp"
         assert variables["title"] == "Senior Engineer"
         assert (
-            variables["description"]
-            == "We need a senior engineer with Python and Go experience."
+            variables["description"] == "We need a senior engineer with Python and Go experience."
         )
         assert variables["name"] == "Jane Doe"
         assert variables["profile_title"] == "Senior Software Engineer"

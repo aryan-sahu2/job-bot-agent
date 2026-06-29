@@ -35,9 +35,7 @@ class JobEvaluator:
         profile: Profile | None = None,
     ) -> Evaluation:
         if profile is None:
-            profile = self._profile_manager.load_profile_from_resume(
-                self._get_resume_path()
-            )
+            profile = self._profile_manager.load_profile_from_resume(self._get_resume_path())
 
         variables = self._build_variables(job, profile)
         raw = await self._llm.generate_structured(
@@ -68,8 +66,7 @@ class JobEvaluator:
             for e in profile.experience
         )
         education_str = "; ".join(
-            f"{e.degree} in {e.field or ''} at {e.institution}"
-            for e in profile.education
+            f"{e.degree} in {e.field or ''} at {e.institution}" for e in profile.education
         )
         return {
             "company": job.company,

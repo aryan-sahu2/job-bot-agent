@@ -9,6 +9,7 @@ from src.screen.hotkey import GlobalHotkeyListener, _convert_hotkey_format
 def dummy_callback():
     async def callback():
         pass
+
     return callback
 
 

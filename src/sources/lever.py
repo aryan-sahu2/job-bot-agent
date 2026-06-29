@@ -28,9 +28,7 @@ class LeverSource(Source):
                 jobs.extend(found)
             except Exception:
                 logger.exception("Failed to scrape Lever company: %s", slug)
-                await self._browser.screenshot(
-                    f"storage/screenshots/lever_{slug}_error.png"
-                )
+                await self._browser.screenshot(f"storage/screenshots/lever_{slug}_error.png")
         logger.info(
             "Discovered %d jobs from Lever (%d companies)",
             len(jobs),

@@ -136,8 +136,13 @@ class ScreenWorkflow:
                     await self._save_application("submitted")
                     logger.info("Application submitted")
                 else:
-                    logger.warning("Submit button not found — form filled but needs manual submission")
-                    print("\nWarning: Could not find submit button. Form is filled, please submit manually.")
+                    logger.warning(
+                        "Submit button not found — form filled but needs manual submission"
+                    )
+                    print(
+                        "\nWarning: Could not find submit button. "
+                        "Form is filled, please submit manually."
+                    )
                     await self._save_application("reviewing")
             else:
                 await self._save_application("reviewing")
@@ -197,7 +202,8 @@ class ScreenWorkflow:
 
         # Custom screener questions
         custom_fields = [
-            f for f in (fields or [])
+            f
+            for f in (fields or [])
             if f.field_type in (FieldType.TEXTAREA, FieldType.TEXT)
             and (f.title.strip() or f.description.strip())
         ]
@@ -286,6 +292,7 @@ class ScreenWorkflow:
 
         try:
             from uuid import uuid4
+
             from src.models.application import Application
 
             app = Application(

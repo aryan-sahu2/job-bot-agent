@@ -24,9 +24,7 @@ SECTION_HEADERS: dict[str, str] = {
 }
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}")
-PHONE_RE = re.compile(
-    r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
-)
+PHONE_RE = re.compile(r"(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}")
 URL_RE = re.compile(r"https?://(?:www\.)?[a-zA-Z0-9./_-]+")
 
 
@@ -204,9 +202,7 @@ class ResumeParser:
                         Experience(
                             title=title,
                             company=company,
-                            description=self._parse_dates_and_desc(dates, description_lines)[
-                                1
-                            ]
+                            description=self._parse_dates_and_desc(dates, description_lines)[1]
                             if dates
                             else " ".join(description_lines),
                             start_date=self._parse_date_range(dates)[0] if dates else None,
@@ -233,9 +229,7 @@ class ResumeParser:
         return None, None
 
     @staticmethod
-    def _parse_dates_and_desc(
-        dates: str, desc_lines: list[str]
-    ) -> tuple[str | None, str]:
+    def _parse_dates_and_desc(dates: str, desc_lines: list[str]) -> tuple[str | None, str]:
         return None, " ".join(desc_lines)
 
     @staticmethod

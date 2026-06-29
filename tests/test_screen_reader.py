@@ -1,118 +1,289 @@
-"""Tests for screen reader."""
+"""Tests for DOM-based screen reader."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src.screen.reader import ScreenReader
+import pytest
+
+from src.screen.reader import ScreenReader, ScreenReaderError
+
+
+def _make_page(**kwargs):
+    from unittest.mock import AsyncMock
+
+    page = MagicMock(**kwargs)
+    page.is_closed.return_value = False
+    page.click = AsyncMock()
+    page.fill = AsyncMock()
+    page.select_option = AsyncMock()
+    page.set_checked = AsyncMock()
+    page.type = AsyncMock()
+    page.evaluate = AsyncMock()
+    page.screenshot = AsyncMock()
+    page.title = AsyncMock()
+    page.content = AsyncMock()
+    page.query_selector_all = AsyncMock()
+    page.query_selector = AsyncMock()
+    page.wait_for_selector = AsyncMock()
+    page.set_input_files = AsyncMock()
+    return page
 
 
 class TestScreenReader:
-    def test_initialization(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
+    @pytest.mark.asyncio
+    async def test_initialization(self):
+        reader = ScreenReader()
+        assert reader._playwright is None
+        assert reader._browser is None
+        assert reader._page is None
+
+    @pytest.mark.asyncio
+    async def test_connect_success(self):
+        mock_page = _make_page(url="https://example.com")
+        mock_context = MagicMock()
+        mock_context.pages = [mock_page]
+        mock_browser = MagicMock()
+        mock_browser.contexts = [mock_context]
+        mock_pw = AsyncMock()
+        mock_pw.chromium.connect_over_cdp = AsyncMock(return_value=mock_browser)
+        mock_pw_instance = MagicMock()
+        mock_pw_instance.start = AsyncMock(return_value=mock_pw)
+
+        with patch("playwright.async_api.async_playwright", return_value=mock_pw_instance):
             reader = ScreenReader()
-            assert reader._system_wide is not None
+            await reader.connect()
 
-    def test_get_attribute(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementCopyAttributeValue.return_value = (0, "test_value")
+            assert reader._browser is not None
+            assert reader._page is not None
 
+    @pytest.mark.asyncio
+    async def test_connect_already_connected(self):
+        reader = ScreenReader()
+        reader._browser = MagicMock()
+        await reader.connect()
+        assert reader._browser is not None
+
+    @pytest.mark.asyncio
+    async def test_connect_failure(self):
+        mock_pw_instance = MagicMock()
+        mock_pw_instance.start = AsyncMock(side_effect=Exception("Connection refused"))
+
+        with patch("playwright.async_api.async_playwright", return_value=mock_pw_instance):
             reader = ScreenReader()
-            element = MagicMock()
-            result = reader.get_attribute(element, "AXTitle")
-            assert result == "test_value"
+            with pytest.raises(ScreenReaderError, match="Failed to connect to browser"):
+                await reader.connect()
 
-    def test_get_attribute_failure(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementCopyAttributeValue.return_value = (1, None)
+    @pytest.mark.asyncio
+    async def test_get_page_returns_page(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.get_attribute(element, "AXTitle")
-            assert result is None
+        page = await reader.get_page()
+        assert page == mock_page
 
-    def test_get_children(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
+    @pytest.mark.asyncio
+    async def test_get_page_reconnects_when_closed(self):
+        reader = ScreenReader()
+        reader.connect = AsyncMock()
+        mock_page = _make_page()
+        mock_page.is_closed.return_value = True
+        reader._page = mock_page
 
-            child1 = MagicMock()
-            child2 = MagicMock()
-            mock_ax.AXUIElementCopyAttributeValue.return_value = (0, [child1, child2])
+        page = await reader.get_page()
+        assert page == mock_page
+        reader.connect.assert_awaited_once()
 
-            reader = ScreenReader()
-            element = MagicMock()
-            children = reader.get_children(element)
-            assert len(children) == 2
-            assert children[0] == child1
-            assert children[1] == child2
+    @pytest.mark.asyncio
+    async def test_get_page_raises_when_no_page(self):
+        reader = ScreenReader()
+        reader.connect = AsyncMock()
+        reader._page = None
 
-    def test_get_children_empty(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementCopyAttributeValue.return_value = (1, None)
+        with pytest.raises(ScreenReaderError, match="No page available"):
+            await reader.get_page()
 
-            reader = ScreenReader()
-            element = MagicMock()
-            children = reader.get_children(element)
-            assert len(children) == 0
+    @pytest.mark.asyncio
+    async def test_url(self):
+        reader = ScreenReader()
+        mock_page = _make_page(url="https://example.com/jobs")
+        reader._page = mock_page
 
-    def test_perform_action_success(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementPerformAction.return_value = 0
+        url = await reader.url()
+        assert url == "https://example.com/jobs"
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.perform_action(element, "AXPress")
-            assert result is True
+    @pytest.mark.asyncio
+    async def test_title(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.title = AsyncMock(return_value="Jobs Page")
+        reader._page = mock_page
 
-    def test_perform_action_failure(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementPerformAction.return_value = 1
+        title = await reader.title()
+        assert title == "Jobs Page"
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.perform_action(element, "AXPress")
-            assert result is False
+    @pytest.mark.asyncio
+    async def test_content(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.content = AsyncMock(return_value="<html></html>")
+        reader._page = mock_page
 
-    def test_click_element(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementPerformAction.return_value = 0
+        content = await reader.content()
+        assert content == "<html></html>"
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.click_element(element)
-            assert result is True
+    @pytest.mark.asyncio
+    async def test_visible_text(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.evaluate = AsyncMock(return_value="Some visible text")
+        reader._page = mock_page
 
-    def test_focus_element(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementPerformAction.return_value = 0
+        text = await reader.visible_text()
+        assert text == "Some visible text"
+        mock_page.evaluate.assert_called_once_with("() => document.body?.innerText || ''")
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.focus_element(element)
-            assert result is True
+    @pytest.mark.asyncio
+    async def test_eval(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.evaluate = AsyncMock(return_value=42)
+        reader._page = mock_page
 
-    def test_set_value_success(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementSetAttributeValue.return_value = 0
+        result = await reader.eval("1 + 1")
+        assert result == 42
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.set_value(element, "test value")
-            assert result is True
+    @pytest.mark.asyncio
+    async def test_query_all(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.query_selector_all = AsyncMock(return_value=["el1", "el2"])
+        reader._page = mock_page
 
-    def test_set_value_failure(self):
-        with patch("src.screen.reader.app_services") as mock_ax:
-            mock_ax.AXUIElementCreateSystemWide.return_value = MagicMock()
-            mock_ax.AXUIElementSetAttributeValue.return_value = 1
+        elements = await reader.query_all("button")
+        assert elements == ["el1", "el2"]
 
-            reader = ScreenReader()
-            element = MagicMock()
-            result = reader.set_value(element, "test value")
-            assert result is False
+    @pytest.mark.asyncio
+    async def test_query_found(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.query_selector = AsyncMock(return_value=MagicMock())
+        reader._page = mock_page
+
+        elem = await reader.query("#submit")
+        assert elem is not None
+
+    @pytest.mark.asyncio
+    async def test_query_not_found(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.query_selector = AsyncMock(return_value=None)
+        reader._page = mock_page
+
+        elem = await reader.query("#nonexistent")
+        assert elem is None
+
+    @pytest.mark.asyncio
+    async def test_click(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.click("#btn")
+        mock_page.click.assert_called_once_with("#btn")
+
+    @pytest.mark.asyncio
+    async def test_fill(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.fill("#email", "test@example.com")
+        mock_page.fill.assert_called_once_with("#email", "test@example.com")
+
+    @pytest.mark.asyncio
+    async def test_select(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.select("#level", "Senior")
+        mock_page.select_option.assert_called_once_with("#level", label="Senior")
+
+    @pytest.mark.asyncio
+    async def test_check_true(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.check("#agree", True)
+        mock_page.set_checked.assert_called_once_with("#agree", True)
+
+    @pytest.mark.asyncio
+    async def test_check_false(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.check("#agree", False)
+        mock_page.set_checked.assert_called_once_with("#agree", False)
+
+    @pytest.mark.asyncio
+    async def test_upload(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.upload("#resume", "/path/to/resume.pdf")
+        mock_page.set_input_files.assert_called_once_with("#resume", "/path/to/resume.pdf")
+
+    @pytest.mark.asyncio
+    async def test_type_text(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.type_text("#input", "hello")
+        mock_page.type.assert_called_once_with("#input", "hello", delay=50)
+
+    @pytest.mark.asyncio
+    async def test_scroll_to(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.scroll_to("#target")
+        mock_page.evaluate.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_wait_for(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        mock_page.wait_for_selector = AsyncMock(return_value=MagicMock())
+        reader._page = mock_page
+
+        result = await reader.wait_for("#load", timeout=3000)
+        assert result is not None
+        mock_page.wait_for_selector.assert_called_once_with("#load", timeout=3000)
+
+    @pytest.mark.asyncio
+    async def test_screenshot(self):
+        reader = ScreenReader()
+        mock_page = _make_page()
+        reader._page = mock_page
+
+        await reader.screenshot("/tmp/shot.png")
+        mock_page.screenshot.assert_called_once_with(path="/tmp/shot.png", full_page=True)
+
+    @pytest.mark.asyncio
+    async def test_close(self):
+        reader = ScreenReader()
+        mock_browser = AsyncMock()
+        reader._browser = mock_browser
+        reader._page = MagicMock()
+        reader._playwright = MagicMock()
+
+        await reader.close()
+        mock_browser.close.assert_awaited_once()
+        assert reader._browser is None
+        assert reader._page is None
+        assert reader._playwright is None

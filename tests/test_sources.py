@@ -223,10 +223,13 @@ class TestGreenhouseSource:
         class EmptyBrowser:
             async def navigate(self, url: str) -> None:
                 pass
+
             async def wait_for(self, selector: str, timeout: int | None = None) -> None:
                 pass
+
             async def evaluate(self, expression: str) -> object:
                 return []
+
             async def screenshot(self, path: str) -> None:
                 pass
 
@@ -247,8 +250,18 @@ class MockLeverBrowserEngine:
 
     async def evaluate(self, expression: str) -> object:
         return [
-            {"title": "Backend Engineer", "team": "Platform", "location": "SF", "url": "https://jobs.lever.co/testco/abc123"},
-            {"title": "Product Manager", "team": "Product", "location": "Remote", "url": "https://jobs.lever.co/testco/def456"},
+            {
+                "title": "Backend Engineer",
+                "team": "Platform",
+                "location": "SF",
+                "url": "https://jobs.lever.co/testco/abc123",
+            },
+            {
+                "title": "Product Manager",
+                "team": "Product",
+                "location": "Remote",
+                "url": "https://jobs.lever.co/testco/def456",
+            },
         ]
 
     async def screenshot(self, path: str) -> None:
@@ -304,7 +317,12 @@ class MockLinkedInBrowserEngine:
 
     async def evaluate(self, expression: str) -> object:
         return [
-            {"title": "ML Engineer", "company": "AI Corp", "location": "London", "url": "https://linkedin.com/jobs/view/123"},
+            {
+                "title": "ML Engineer",
+                "company": "AI Corp",
+                "location": "London",
+                "url": "https://linkedin.com/jobs/view/123",
+            },
             {"title": "DevOps Engineer", "company": "Cloud Inc", "location": "Berlin", "url": None},
         ]
 
@@ -356,7 +374,12 @@ class TestLinkedInSource:
         async def evaluate_override(_expr: str) -> object:
             return [
                 {"title": "", "company": "", "location": None, "url": None},
-                {"title": "Valid", "company": "Co", "location": "NY", "url": "https://linkedin.com/jobs/view/1"},
+                {
+                    "title": "Valid",
+                    "company": "Co",
+                    "location": "NY",
+                    "url": "https://linkedin.com/jobs/view/1",
+                },
             ]
 
         browser.evaluate = evaluate_override  # type: ignore[assignment]

@@ -89,9 +89,7 @@ class TestReviewCancel:
         assert retrieved.status == "cancelled"
 
     @pytest.mark.asyncio
-    async def test_unrecognised_input_falls_back_to_cancel(
-        self, db: Database, app: Application
-    ):
+    async def test_unrecognised_input_falls_back_to_cancel(self, db: Database, app: Application):
         db.save_application(app)
         inputs = iter(["x"])
         with patch("builtins.input", lambda _: next(inputs)):
@@ -105,13 +103,9 @@ class TestReviewCancel:
 
 class TestReviewRewrite:
     @pytest.mark.asyncio
-    async def test_rewrite_calls_llm_and_keeps_new_version(
-        self, db: Database, app: Application
-    ):
+    async def test_rewrite_calls_llm_and_keeps_new_version(self, db: Database, app: Application):
         mock_llm = AsyncMock()
-        mock_llm.generate_text = AsyncMock(
-            return_value="Rewritten cover letter text."
-        )
+        mock_llm.generate_text = AsyncMock(return_value="Rewritten cover letter text.")
 
         inputs = iter(["r", "y", "a"])
         with patch("builtins.input", lambda _: next(inputs)):
@@ -123,9 +117,7 @@ class TestReviewRewrite:
         assert result.answers["cover_letter"] == "Rewritten cover letter text."
 
     @pytest.mark.asyncio
-    async def test_rewrite_skipped_when_no_llm(
-        self, db: Database, app: Application
-    ):
+    async def test_rewrite_skipped_when_no_llm(self, db: Database, app: Application):
         inputs = iter(["r", "a"])
         with patch("builtins.input", lambda _: next(inputs)):
             workflow = ReviewWorkflow(db, llm_engine=None)
@@ -135,13 +127,9 @@ class TestReviewRewrite:
         assert result.answers == SAMPLE_ANSWERS
 
     @pytest.mark.asyncio
-    async def test_rewrite_reject_keeps_original(
-        self, db: Database, app: Application
-    ):
+    async def test_rewrite_reject_keeps_original(self, db: Database, app: Application):
         mock_llm = AsyncMock()
-        mock_llm.generate_text = AsyncMock(
-            return_value="Rewritten version."
-        )
+        mock_llm.generate_text = AsyncMock(return_value="Rewritten version.")
 
         inputs = iter(["r", "n", "a"])
         with patch("builtins.input", lambda _: next(inputs)):
@@ -154,9 +142,7 @@ class TestReviewRewrite:
 
 class TestReviewEdit:
     @pytest.mark.asyncio
-    async def test_edit_changes_answer_text(
-        self, db: Database, app: Application
-    ):
+    async def test_edit_changes_answer_text(self, db: Database, app: Application):
         inputs = iter(["e", "1", "I am an excellent fit.", "a"])
         with patch("builtins.input", lambda _: next(inputs)):
             workflow = ReviewWorkflow(db)
@@ -166,9 +152,7 @@ class TestReviewEdit:
         assert result.answers["cover_letter"] == "I am an excellent fit."
 
     @pytest.mark.asyncio
-    async def test_edit_skip_keeps_original(
-        self, db: Database, app: Application
-    ):
+    async def test_edit_skip_keeps_original(self, db: Database, app: Application):
         inputs = iter(["e", "", "a"])
         with patch("builtins.input", lambda _: next(inputs)):
             workflow = ReviewWorkflow(db)

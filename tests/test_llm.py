@@ -163,10 +163,12 @@ class TestLLMEngine:
 
     @pytest.mark.asyncio
     async def test_generate_structured_retries_on_validation_error(self):
-        provider = MockProvider([
-            '{"score": "bad", "label": "nope"}',
-            '{"score": 75, "label": "okay"}',
-        ])
+        provider = MockProvider(
+            [
+                '{"score": "bad", "label": "nope"}',
+                '{"score": 75, "label": "okay"}',
+            ]
+        )
         loader = PromptLoader()
         engine = LLMEngine(provider, loader, max_retries=2)
 
@@ -260,13 +262,13 @@ class TestLLMEngine:
 
     @pytest.mark.asyncio
     async def test_parse_json_strips_surrounding_text(self):
-        raw = "Some text before\n{\"key\": \"value\"}\nSome text after"
+        raw = 'Some text before\n{"key": "value"}\nSome text after'
         result = LLMEngine._parse_json(raw)
         assert result == {"key": "value"}
 
     @pytest.mark.asyncio
     async def test_parse_json_with_markdown_fence(self):
-        raw = "```json\n{\"key\": \"value\"}\n```"
+        raw = '```json\n{"key": "value"}\n```'
         result = LLMEngine._parse_json(raw)
         assert result == {"key": "value"}
 

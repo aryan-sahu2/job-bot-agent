@@ -25,7 +25,14 @@ class FormFiller:
 
         try:
             match field.field_type:
-                case FieldType.TEXT | FieldType.EMAIL | FieldType.PHONE | FieldType.NAME | FieldType.URL | FieldType.DATE:
+                case (
+                    FieldType.TEXT
+                    | FieldType.EMAIL
+                    | FieldType.PHONE
+                    | FieldType.NAME
+                    | FieldType.URL
+                    | FieldType.DATE
+                ):
                     await self._reader.fill(field.identifier, value)
                 case FieldType.TEXTAREA:
                     await self._reader.fill(field.identifier, value)
@@ -70,9 +77,7 @@ class FormFiller:
         logger.info("Filled %d fields, %d failed", success, failure)
         return success, failure
 
-    def _find_value_for_field(
-        self, field: DetectedField, values: dict[str, str]
-    ) -> str | None:
+    def _find_value_for_field(self, field: DetectedField, values: dict[str, str]) -> str | None:
         # 1. Standard field mapping
         standard = self._detector.map_to_standard_field(field)
         if standard and standard in values:

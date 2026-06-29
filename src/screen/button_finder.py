@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from src.screen.models import ApplyButton
 from src.screen.reader import ScreenReader
@@ -52,9 +51,7 @@ class ApplyButtonFinder:
         """Find submit buttons on the current page."""
         return await self._find_buttons(SUBMIT_SELECTORS, "submit")
 
-    async def _find_buttons(
-        self, selectors: list[str], label: str
-    ) -> list[ApplyButton]:
+    async def _find_buttons(self, selectors: list[str], label: str) -> list[ApplyButton]:
         buttons: list[ApplyButton] = []
 
         for selector in selectors:

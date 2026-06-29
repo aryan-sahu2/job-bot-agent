@@ -28,9 +28,7 @@ class GreenhouseSource(Source):
                 jobs.extend(found)
             except Exception:
                 logger.exception("Failed to scrape Greenhouse board: %s", slug)
-                await self._browser.screenshot(
-                    f"storage/screenshots/greenhouse_{slug}_error.png"
-                )
+                await self._browser.screenshot(f"storage/screenshots/greenhouse_{slug}_error.png")
         logger.info(
             "Discovered %d jobs from Greenhouse (%d boards)",
             len(jobs),
