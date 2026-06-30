@@ -50,89 +50,33 @@ def health():
 def get_profile():
     if not RESUME_PATH.exists():
         return {"error": f"{RESUME_PATH} not found"}
-    raw = RESUME_PATH.read_text()
-    lines = [line.strip() for line in raw.splitlines() if line.strip()]
-    name = lines[0] if lines else "Applicant"
-    email = next((line for line in lines if "@" in line and "." in line.split("@")[-1]), "")
     
-    # Better phone detection
-    phone = ""
-    for line in lines:
-        if "@" in line:
-            continue
-        digits = ''.join(c for c in line if c.isdigit())
-        if len(digits) >= 10 and len(digits) <= 15:
-            phone = line
-            break
+    try:
+        data = json.loads(RESUME_PATH.read_text())
+    except json.JSONDecodeError as e:
+        return {"error": f"Invalid JSON in {RESUME_PATH}: {str(e)}"}
     
-    # Extract URLs
-    linkedin = ""
-    website = ""
-    github = ""
-    for line in lines:
-        if "linkedin.com" in line.lower():
-            linkedin = line
-        elif "github.com" in line.lower() or "gitlab.com" in line.lower():
-            github = line
-        elif "://" in line and not linkedin and not website and not github:
-            if not any(x in line.lower() for x in ["email", "phone", "tel:", "mailto:"]):
-                website = line
-    
-    # Extract experience years
-    years_experience = ""
-    for line in lines:
-        match = re.search(r'(\d+(?:\.\d+)?)\+?\s*years?', line, re.IGNORECASE)
-        if match:
-            years_experience = match.group(1)
-            break
-    
-    # Extract current role from structured header
-    current_role = "Full Stack Developer"
-    for line in lines:
-        if line.lower().startswith("role:"):
-            current_role = line.split(":", 1)[1].strip()
-            break
-    
-    # Extract notice period
-    notice_period = "0"
-    for line in lines:
-        if "notice" in line.lower() and ("week" in line.lower() or "day" in line.lower() or "month" in line.lower()):
-            match = re.search(r'(\d+)', line)
-            if match:
-                notice_period = match.group(1)
-            break
-    
-    # Extract expected CTC
-    expected_ctc = ""
-    for line in lines:
-        if "expected" in line.lower() and ("ctc" in line.lower() or "lpa" in line.lower() or "salary" in line.lower()):
-            expected_ctc = line.split(":", 1)[1].strip() if ":" in line else line
-            break
-    
-    # Extract referral source
-    referral_source = ""
-    for line in lines:
-        if line.lower().startswith("source:"):
-            referral_source = line.split(":", 1)[1].strip()
-            break
-    
-    parts = name.split()
-    return {
-        "name": name,
-        "first_name": parts[0] if parts else "",
-        "last_name": parts[-1] if len(parts) > 1 else "",
-        "email": email,
-        "phone": phone,
-        "website": website or github,
-        "linkedin": linkedin,
-        "github": github,
-        "yearsExperience": years_experience,
-        "currentRole": current_role,
-        "noticePeriod": notice_period,
-        "expectedCtc": expected_ctc,
-        "referralSource": referral_source,
-        "raw": raw,
+    # Ensure all expected keys exist with fallbacks
+    profile = {
+        "name": data.get("name", "Applicant"),
+        "first_name": data.get("first_name", ""),
+        "last_name": data.get("last_name", ""),
+        "email": data.get("email", ""),
+        "phone": data.get("phone", ""),
+        "location": data.get("location", ""),
+        "current_role": data.get("current_role", ""),
+        "years_experience": data.get("years_experience", ""),
+        "linkedin": data.get("linkedin", ""),
+        "github": data.get("github", ""),
+        "portfolio": data.get("portfolio", ""),
+        "website": data.get("portfolio", "") or data.get("github", ""),  # alias for extension
+        "notice_period_weeks": data.get("notice_period_weeks", ""),
+        "expected_ctc": data.get("expected_ctc", ""),
+        "referral_source": data.get("referral_source", ""),
+        "raw": data.get("raw_bio", "") or json.dumps(data, indent=2),
     }
+    
+    return profile
 
 @app.get("/jobs")
 def get_jobs():
@@ -209,6 +153,11 @@ async def cover_letter(payload: dict):
         f"I've spent the last three years building and breaking production systems — mostly Next.js frontends, Node APIs, and the infrastructure that holds them together. At Infravue, I migrated a legacy HTML/CSS/Three.js stack to Next.js because the old codebase was becoming unmaintainable. Cut maintenance overhead by about 40% and got 3D animations running smoother in the process.\n\n"
         f"Before that, I built a job discovery platform from scratch at Kangagigs — React, Node, PostgreSQL, deployed on AWS EC2 with Nginx and PM2. Scaled it to 500 users, which isn't massive, but I owned every part of it from schema design to server config. I tend to work end-to-end, and I prefer shipping over meetings.\n\n"
         f"Your stack and the scope of this role look like a good fit for how I work. Happy to walk through any of the above in more detail.\n\n"
+        f"=== OUTPUT RULES ===\n"
+        f"1. Output ONLY the cover letter body. No preamble like 'Here is a cover letter' or 'Okay, here is...'.\n"
+        f"2. Do not wrap the output in markdown code blocks.\n"
+        f"3. Start directly with the first sentence of the letter.\n"
+        f"4. Do not include a signature or closing like 'Best regards'.\n\n"
     )
 
     try:
@@ -220,7 +169,7 @@ async def cover_letter(payload: dict):
                     "prompt": prompt,
                     "stream": False,
                     "options": {
-                        "temperature": 0.4,
+                        "temperature": 0.45,
                         "top_p": 0.9,
                     }
                 },

@@ -1,0 +1,17 @@
+{
+  "name": "Aryan Sahu",
+  "first_name": "Aryan",
+  "last_name": "Sahu",
+  "email": "aryanwin0609@gmail.com",
+  "phone": "+91 7058602394",
+  "location": "Pune, Maharashtra",
+  "current_role": "Full Stack Developer",
+  "years_experience": "3.5",
+  "linkedin": "https://www.linkedin.com/in/aryan-sahu",
+  "github": "https://github.com/aryan-sahu2",
+  "portfolio": "https://dev-portfolio-4d2.pages.dev/",
+  "notice_period_weeks": "0",
+  "expected_ctc": "18-24 LPA INR",
+  "referral_source": "LinkedIn",
+  "raw_bio": "Full Stack Developer with 3+ years of production experience building and shipping web applications at scale. Delivered features for enterprise clients (Vodafone India, Bank of Maharashtra) supporting 10M+ daily banking transactions; currently architecting production Next.js systems for a Dubai-based startup. Strong end-to-end ownership from React/Next.js frontends and Node.js API design to PostgreSQL schema architecture and AWS/Nginx production deployments.\n\nFull Stack Developer at Infravue Technologies (July 2025 - Present)\n- Architected and deployed production Next.js, Node.js and Python backend applications with PM2/Nginx across multiple subdomains, achieving zero-downtime deployments\n- Built Cloudflare Workers backend for serverless form processing, maintaining legacy infrastructure in parallel\n- Migrated legacy HTML/CSS/Three.js codebase to Next.js, reducing maintenance overhead by 40% while enhancing 3D animation performance\n\nFull Stack Developer (Co-Founder) at Kangagigs (March 2025 - July 2025)\n- Architected and shipped a full-stack job discovery platform (React, Node.js, PostgreSQL, Prisma) with JWT-secured REST APIs, independently deployed on AWS EC2\n- Scaled to 500+ registered users; led 3 UI/UX iterations reducing page load time by 35%\n\nApplication Engineer at Newgen Software Technologies (February 2023 - March 2025)\n- Delivered production features for enterprise clients (Vodafone India, Bank of Maharashtra) in Java and JavaScript, supporting systems processing 10M+ daily banking transactions\n\nBachelor of Engineering in Electronics and Telecommunication, D. Y. Patil College of Engineering, 8.67 CGPA\n\nSkills: React, Next.js, TypeScript, Tailwind CSS, Redux, Framer Motion, GSAP, Three.js, Node.js, Express.js, NestJS, REST APIs, JWT, PostgreSQL, Prisma, MongoDB, AWS EC2, Docker, Nginx, PM2, Cloudflare Workers, Linux, Java"
+}

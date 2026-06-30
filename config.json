@@ -20,5 +20,5 @@
   "llm_model": "gemma3:4b",
   "llm_timeout": 90,
   "output_dir": "output",
-  "resume_path": "resume.txt"
+  "resume_path": "resume.json"
 }
