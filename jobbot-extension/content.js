@@ -453,6 +453,32 @@
     return score;
   }
 
+  function isLikelyCustomQuestion(el) {
+    if (el.tagName !== "TEXTAREA" && (el.type !== "text" || !el.maxLength || el.maxLength < 200)) {
+      return false;
+    }
+
+    const clues = getAllTextClues(el);
+    const text = clues.join(" ");
+    const placeholder = (el.placeholder || "").toLowerCase();
+    const name = el.name || "";
+    const id = el.id || "";
+
+    let score = 0;
+    if (/^\d+$/.test(name)) score += 3;
+    if (/candidateAnswer|customQuestion|question/i.test(id)) score += 3;
+    if (/write your answer|enter your answer|type here|your response/i.test(placeholder)) score += 2;
+    if (text.includes("?")) score += 2;
+    if (/\b(write|describe|tell us|explain|share|brief|detail|answer|introduction|about yourself|background|why|how|what|motivation|challenge|strength|weakness|achievement|note:|please)\b/i.test(text)) score += 2;
+    if (el.tagName === "TEXTAREA") score += 1;
+    if (el.maxLength > 500) score += 1;
+
+    const wrapper = el.closest('.space-y-2, [class*="form-item"], [class*="field-wrapper"]');
+    if (wrapper && wrapper.querySelector("label")?.innerText.length > 50) score += 1;
+
+    return score >= 3;
+  }
+
   function findBestInputs() {
     const allInputs = Array.from(
       document.querySelectorAll("input, textarea, select"),
@@ -471,9 +497,18 @@
       );
     });
 
-    console.log(
-      `[JobBot] Found ${visibleInputs.length} visible inputs out of ${allInputs.length}`,
-    );
+    const standardInputs = [];
+    const customQuestions = [];
+
+    for (const el of visibleInputs) {
+      if (isLikelyCustomQuestion(el)) {
+        customQuestions.push(el);
+      } else {
+        standardInputs.push(el);
+      }
+    }
+
+    console.log(`[JobBot] ${visibleInputs.length} total | ${customQuestions.length} custom questions | ${standardInputs.length} standard`);
 
     const candidates = {};
     const assigned = new Set();
@@ -486,22 +521,22 @@
       "currentRole",
       "yearsExperience",
       "location",
-      "salary",
       "expectedCtc",
+      "salary",
       "portfolio",
       "github",
       "linkedin",
       "website",
-      "coverLetter",
       "noticePeriod",
       "referralSource",
+      "coverLetter",
     ];
 
     for (const type of types) {
       let best = null;
       let bestScore = 0;
 
-      for (const el of visibleInputs) {
+      for (const el of standardInputs) {
         if (assigned.has(el)) continue;
         const clues = getAllTextClues(el);
         const s = scoreField(clues, type);
@@ -515,153 +550,136 @@
         candidates[type] = best;
         assigned.add(best);
         console.log(
-          `[JobBot] MATCH ${type} (score ${bestScore}): clues=[${getAllTextClues(best).slice(0, 4).join(", ")}]`,
+          `[JobBot] MATCH ${type} (score ${bestScore})`,
         );
       }
     }
 
-    const unmatched = visibleInputs.filter((el) => !assigned.has(el));
-    if (unmatched.length > 0) {
-      console.log(`[JobBot] ${unmatched.length} unmatched inputs:`);
-      unmatched.slice(0, 10).forEach((el) => {
-        console.log(
-          `  - ${el.tagName} type=${el.type} name=${el.name} id=${el.id} clues=[${getAllTextClues(el).slice(0, 3).join(", ")}]`,
-        );
-      });
-    }
-
-    return { candidates, unmatched };
+    const unmatched = standardInputs.filter((el) => !assigned.has(el));
+    return { candidates, unmatched, customQuestions };
   }
 
   // ===== CUSTOM QUESTION FILLER =====
-  async function fillCustomQuestions(profile, unmatchedInputs) {
-    const questions = [];
+  function generateIntroduction(profile) {
+    const raw = profile.raw_bio || "";
+    const role = profile.current_role || "Developer";
+    const years = profile.years_experience || "";
+    const skills = profile.skills || "";
 
-    for (const el of unmatchedInputs) {
-      if (el.tagName !== "TEXTAREA" && el.type !== "text" && el.type !== "url")
-        continue;
-
-      const clues = getAllTextClues(el);
-      const labelText = clues.join(" ");
-
-      const hasQuestionMark = labelText.includes("?");
-      const hasInstructionWords =
-        /\b(write|describe|tell us|explain|share|what|how|why|please|brief|detail|answer|list)\b/.test(
-          labelText,
-        );
-      const hasQuestionWords =
-        /\b(introduction|about yourself|background|experience|salary|compensation|notice|availability|why|motivation|interest|challenge|strength|weakness|achievement|fit|qualification|project|skill)\b/.test(
-          labelText,
-        );
-
-      const isCustomQuestion =
-        hasQuestionMark || (hasInstructionWords && hasQuestionWords);
-      const isLargeField =
-        el.tagName === "TEXTAREA" ||
-        (el.maxLength && el.maxLength > 200) ||
-        (el.placeholder && el.placeholder.length > 30);
-
-      if (isCustomQuestion && isLargeField) {
-        let qType = "general";
-        const text = labelText;
-
-        if (
-          /\b(introduction|about yourself|background|bio|tell me about|who are you|describe yourself)\b/.test(
-            text,
-          )
-        )
-          qType = "introduction";
-        else if (
-          /\b(salary|compensation|pay|ctc|expected|desired.*monthly|desired.*yearly|monthly salary|yearly salary|pay range|remuneration)\b/.test(
-            text,
-          )
-        )
-          qType = "salary";
-        else if (
-          /\b(why.*company|why.*role|why.*apply|motivation|interest.*role|interest.*company|why do you want)\b/.test(
-            text,
-          )
-        )
-          qType = "motivation";
-        else if (
-          /\b(availability|notice|start.*date|when.*join|when.*start|how soon|available from)\b/.test(
-            text,
-          )
-        )
-          qType = "availability";
-        else if (
-          /\b(cover.*letter|additional.*info|anything else|supplement|message)\b/.test(
-            text,
-          )
-        )
-          qType = "cover";
-        else if (
-          /\b(experience.*relevant|relevant.*experience|why.*fit|why.*qualified|match.*role)\b/.test(
-            text,
-          )
-        )
-          qType = "fit";
-
-        questions.push({
-          element: el,
-          question: labelText,
-          type: qType,
-          rawLabel: clues[0] || labelText,
-        });
-      }
+    const firstPara = raw.split("\n\n")[0];
+    if (firstPara && firstPara.length > 100 && firstPara.length < 800) {
+      return firstPara;
     }
 
-    if (questions.length === 0) return 0;
+    return `${profile.name} — ${role} with ${years}+ years shipping production systems. I've built platforms from scratch, handled zero-downtime deployments, and migrated legacy stacks. I work end-to-end and prefer shipping over meetings.`;
+  }
 
+  async function fillCustomQuestions(profile, customQuestions) {
     let filled = 0;
-    for (const q of questions) {
-      let answer = "";
-      let usedLLM = false;
 
-      if (q.type === "salary" && profile.expected_ctc) {
-        answer = profile.expected_ctc;
-        if (
-          /monthly.*usd|usd.*month|\$.*month|per.*month.*usd/.test(
-            q.question,
-          ) &&
-          profile.expected_salary_usd_monthly
-        ) {
-          answer = profile.expected_salary_usd_monthly;
+    for (const el of customQuestions) {
+      const clues = getAllTextClues(el);
+      const labelText = clues.join(" ");
+      const lowerLabel = labelText.toLowerCase();
+
+      let answer = "";
+      let source = "unknown";
+
+      // 1. INTRODUCTION / ABOUT YOURSELF
+      if (/\b(introduction|about yourself|background|bio|tell me about|who are you|describe yourself)\b/i.test(lowerLabel)) {
+        if (profile.custom_answers?.introduction) {
+          answer = profile.custom_answers.introduction;
+          source = "pre-canned";
+        } else {
+          answer = generateIntroduction(profile);
+          source = "generated";
         }
-      } else if (
-        q.type === "availability" &&
-        profile.notice_period_weeks !== undefined
-      ) {
-        answer =
-          profile.notice_period_weeks === "0" ||
-          profile.notice_period_weeks === 0
-            ? "Immediate"
-            : `${profile.notice_period_weeks} weeks`;
-      } else if (q.type === "introduction" && profile.custom_answers?.introduction) {
-        answer = profile.custom_answers.introduction;
-      } else if (q.type === "motivation" && profile.custom_answers?.motivation) {
-        answer = profile.custom_answers.motivation;
-      } else {
-        usedLLM = true;
+      }
+      // 2. SALARY (USD MONTHLY)
+      else if (/\b(monthly salary|salary range.*usd|usd.*month|desired monthly|per month|monthly.*range)\b/i.test(lowerLabel)) {
+        if (profile.expected_salary_usd_monthly) {
+          answer = profile.expected_salary_usd_monthly;
+          source = "pre-canned-usd-monthly";
+        } else if (profile.expected_ctc) {
+          answer = `I'm looking for a range of $1,800 - $2,400 per month, which aligns with my current experience level and the scope of this role.`;
+          source = "converted-estimate";
+        }
+      }
+      // 3. SALARY (USD YEARLY or generic)
+      else if (/\b(salary|compensation|ctc|pay range|desired salary|expected.*salary)\b/i.test(lowerLabel)) {
+        if (profile.expected_salary_usd_yearly) {
+          answer = profile.expected_salary_usd_yearly;
+          source = "pre-canned-usd-yearly";
+        } else if (profile.expected_ctc) {
+          answer = profile.expected_ctc;
+          source = "pre-canned-inr";
+        }
+      }
+      // 4. AVAILABILITY / NOTICE
+      else if (/\b(availability|notice period|start date|joining|how soon|available from)\b/i.test(lowerLabel)) {
+        const notice = profile.notice_period_weeks;
+        if (notice === "0" || notice === 0 || notice === "Immediate") {
+          answer = "I can start immediately.";
+        } else {
+          answer = `I have a ${notice}-week notice period with my current employer, so I can join after that.`;
+        }
+        source = "computed";
+      }
+      // 5. WHY THIS COMPANY / MOTIVATION
+      else if (/\b(why.*company|why.*role|why.*apply|motivation|interest.*role|interest.*company|why do you want)\b/i.test(lowerLabel)) {
+        if (profile.custom_answers?.motivation) {
+          answer = profile.custom_answers.motivation;
+          source = "pre-canned";
+        } else {
+          answer = "I'm looking for a team where I can own features end-to-end and work with modern stacks. This role seems to line up with what I've been building lately.";
+          source = "generic";
+        }
+      }
+      // 6. COVER LETTER / ADDITIONAL INFO
+      else if (/\b(cover letter|additional info|anything else|supplement|message|additional information)\b/i.test(lowerLabel)) {
+        if (profile.custom_answers?.cover_letter) {
+          answer = profile.custom_answers.cover_letter;
+          source = "pre-canned";
+        } else {
+          continue;
+        }
+      }
+      // 7. GENERIC FALLBACK - LLM
+      else {
         try {
           const result = await apiRequest("POST", `${SERVER}/answer-question`, {
             profile: profile,
-            question: q.rawLabel,
-            question_type: q.type,
+            question: clues[0] || labelText,
+            question_type: "general",
           });
           if (result && !result.error && result.answer) {
             answer = result.answer;
+            source = "llm";
           }
         } catch (e) {
-          console.error("[JobBot] Custom question LLM failed:", e);
+          console.error("[JobBot] LLM fallback failed:", e);
+          continue;
         }
       }
 
-      if (answer && setInputValue(q.element, answer)) {
+      // Respect word count hints
+      const wordMatch = labelText.match(/(\d+)\s*-\s*(\d+)\s*words?/i);
+      if (wordMatch && answer.split(/\s+/).length < parseInt(wordMatch[1])) {
+        if (source === "pre-canned" || source === "generated") {
+          try {
+            const result = await apiRequest("POST", `${SERVER}/expand-answer`, {
+              answer: answer,
+              target_words: parseInt(wordMatch[2]),
+              question: labelText,
+            });
+            if (result?.answer) answer = result.answer;
+          } catch (e) {}
+        }
+      }
+
+      if (answer && setInputValue(el, answer)) {
         filled++;
-        console.log(
-          `[JobBot] Filled custom question (${q.type}${usedLLM ? "-LLM" : ""}): ${q.rawLabel.substring(0, 60)}...`,
-        );
+        console.log(`[JobBot] Custom question (${source}): ${labelText.substring(0, 50)}...`);
       }
     }
 
@@ -740,7 +758,7 @@
       }),
     );
 
-    const { candidates: fields, unmatched } = findBestInputs();
+    const { candidates: fields, unmatched, customQuestions } = findBestInputs();
     let filled = 0;
     const log = [];
 
@@ -873,13 +891,11 @@
       `[JobBot] === Filled ${filled} standard fields: ${log.join(", ")} ===`,
     );
 
-    fillCustomQuestions(profile, unmatched).then((customFilled) => {
-      if (customFilled > 0) {
-        console.log(
-          `[JobBot] === Filled ${customFilled} custom questions ===`,
-        );
-      }
-    });
+    if (customQuestions.length > 0) {
+      fillCustomQuestions(profile, customQuestions).then(cf => {
+        console.log(`[JobBot] === Filled ${cf} custom questions ===`);
+      });
+    }
 
     return filled;
   }
@@ -966,97 +982,134 @@
     const div = document.createElement("div");
     div.id = "jobbot-panel";
     div.innerHTML = `
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <strong style="font-size:16px;">JobBot</strong>
-                <button id="jb-close" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:18px;">×</button>
+        <div id="jb-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(148,163,184,0.15);cursor:move;user-select:none;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(99,102,241,0.3);">⚡</div>
+                <div>
+                    <div style="font-size:15px;font-weight:600;color:#f8fafc;letter-spacing:-0.01em;">JobBot</div>
+                    <div style="font-size:11px;color:#64748b;margin-top:1px;">Auto-fill assistant</div>
+                </div>
             </div>
-            <div id="jb-status" style="font-size:12px;color:#94a3b8;margin-bottom:10px;">Server: checking...</div>
-            <button id="jb-fill" style="width:100%;padding:8px;margin-bottom:8px;background:#3b82f6;color:white;border:none;border-radius:4px;cursor:pointer;">Fill Profile</button>
-            <button id="jb-cover" style="width:100%;padding:8px;margin-bottom:8px;background:#10b981;color:white;border:none;border-radius:4px;cursor:pointer;">Generate Cover Letter</button>
-            <div id="jb-cover-box" style="display:none;margin-top:8px;">
-                <textarea id="jb-cover-text" style="width:100%;height:120px;background:#1e293b;color:#e2e8f0;border:1px solid #334155;border-radius:4px;padding:6px;font-size:13px;" placeholder="Cover letter..."></textarea>
-                <button id="jb-paste" style="width:100%;padding:6px;margin-top:4px;background:#6366f1;color:white;border:none;border-radius:4px;cursor:pointer;font-size:12px;">Paste into Form</button>
+            <button id="jb-close" style="background:rgba(255,255,255,0.05);border:none;color:#94a3b8;cursor:pointer;font-size:18px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;">×</button>
+        </div>
+
+        <div id="jb-status" style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94a3b8;margin-bottom:14px;padding:8px 10px;background:rgba(15,23,42,0.6);border-radius:8px;border:1px solid rgba(255,255,255,0.05);">
+            <span id="jb-status-dot" style="width:7px;height:7px;border-radius:50%;background:#ef4444;transition:background 0.3s;"></span>
+            <span id="jb-status-text">Server: checking...</span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:8px;">
+            <button id="jb-fill" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px;background:linear-gradient(135deg,#3b82f6,#6366f1);color:white;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s;box-shadow:0 2px 8px rgba(59,130,246,0.25);letter-spacing:-0.01em;">
+                <span style="font-size:14px;">🚀</span> Fill Profile
+            </button>
+
+            <button id="jb-cover" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px;background:rgba(255,255,255,0.04);color:#e2e8f0;border:1px solid rgba(255,255,255,0.08);border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s;letter-spacing:-0.01em;">
+                <span style="font-size:14px;">✍️</span> Generate Cover Letter
+            </button>
+        </div>
+
+        <div id="jb-cover-box" style="display:none;margin-top:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Cover Letter</div>
+                <div id="jb-cover-meta" style="font-size:10px;color:#475569;"></div>
             </div>
-        `;
+            <textarea id="jb-cover-text" style="width:100%;height:150px;background:rgba(15,23,42,0.5);color:#e2e8f0;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;font-size:12px;line-height:1.6;resize:vertical;font-family:system-ui,sans-serif;outline:none;" placeholder="Click 'Generate' to create a cover letter..."></textarea>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <button id="jb-paste" style="flex:1;padding:8px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:6px;">
+                    <span>📋</span> Paste into Form
+                </button>
+                <button id="jb-copy" style="padding:8px 12px;background:rgba(255,255,255,0.05);color:#94a3b8;border:1px solid rgba(255,255,255,0.08);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.15s;" title="Copy to clipboard">📋</button>
+            </div>
+        </div>
+
+        <div id="jb-log" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.12);font-size:11px;color:#47548b;max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;line-height:1.5;"></div>
+    `;
+
     div.style.cssText = `
-            position:fixed;bottom:20px;right:20px;width:280px;
-            background:#0f172a;color:#e2e8f0;border:1px solid #334155;
-            border-radius:8px;padding:16px;font-family:system-ui,sans-serif;
-            font-size:14px;z-index:999999;box-shadow:0 10px 25px rgba(0,0,0,0.5);line-height:1.4;
-        `;
+        position:fixed;bottom:24px;right:24px;width:320px;
+        background:rgba(15,23,42,0.88);color:#e2e8f0;
+        border:1px solid rgba(255,255,255,0.06);
+        border-radius:16px;padding:18px;
+        font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        font-size:13px;z-index:999999;
+        box-shadow:0 25px 50px -12px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.04);
+        backdrop-filter:blur(16px) saturate(1.2);
+        line-height:1.4;
+        transition:opacity 0.2s,transform 0.2s;
+    `;
+
     document.body.appendChild(div);
     panel = div;
 
-    document.getElementById("jb-close").onclick = () =>
-      (div.style.display = "none");
+    const closeBtn = document.getElementById("jb-close");
+    closeBtn.onmouseenter = () => { closeBtn.style.background = "rgba(255,255,255,0.1)"; closeBtn.style.color = "#f8fafc"; };
+    closeBtn.onmouseleave = () => { closeBtn.style.background = "rgba(255,255,255,0.05)"; closeBtn.style.color = "#94a3b8"; };
+    closeBtn.onclick = () => { div.style.display = "none"; };
 
-    document.getElementById("jb-fill").onclick = async () => {
-      const btn = document.getElementById("jb-fill");
-      btn.textContent = "Filling...";
+    const fillBtn = document.getElementById("jb-fill");
+    fillBtn.onmouseenter = () => { fillBtn.style.transform = "translateY(-1px)"; fillBtn.style.boxShadow = "0 4px 12px rgba(59,130,246,0.35)"; };
+    fillBtn.onmouseleave = () => { fillBtn.style.transform = "translateY(0)"; fillBtn.style.boxShadow = "0 2px 8px rgba(59,130,246,0.25)"; };
+
+    const coverBtn = document.getElementById("jb-cover");
+    coverBtn.onmouseenter = () => { coverBtn.style.background = "rgba(255,255,255,0.08)"; };
+    coverBtn.onmouseleave = () => { coverBtn.style.background = "rgba(255,255,255,0.04)"; };
+
+    fillBtn.onclick = async () => {
+      fillBtn.textContent = "Filling...";
       const profile = await fetchProfile();
       if (!profile) {
-        alert(
-          "JobBot: Cannot reach local server. Make sure you ran: uv run python src/server.py",
-        );
-        btn.textContent = "Fill Profile";
+        alert("JobBot: Cannot reach local server. Run: uv run python src/server.py");
+        fillBtn.innerHTML = '<span style="font-size:14px;">🚀</span> Fill Profile';
         return;
       }
       const filled = fillForm(profile);
-      btn.textContent = `Filled ${filled} field${filled !== 1 ? "s" : ""}`;
-      setTimeout(() => (btn.textContent = "Fill Profile"), 2000);
+      fillBtn.innerHTML = `<span style="font-size:14px;">✅</span> Filled ${filled} fields`;
+      setTimeout(() => fillBtn.innerHTML = '<span style="font-size:14px;">🚀</span> Fill Profile', 2500);
     };
 
-    document.getElementById("jb-cover").onclick = async () => {
-      const btn = document.getElementById("jb-cover");
-      btn.textContent = "Generating...";
+    coverBtn.onclick = async () => {
+      coverBtn.innerHTML = '<span style="font-size:14px;">⏳</span> Generating...';
       const h1 = document.querySelector("h1, h2");
       const title = h1 ? h1.innerText.trim() : document.title;
-      const company =
-        document
-          .querySelector('[class*="company"], [class*="employer"]')
-          ?.innerText.trim() || "";
+      const company = document.querySelector('[class*="company"], [class*="employer"]')?.innerText.trim() || "";
       const result = await generateLetter(title, company);
-      if (!result) {
-        alert("JobBot: Cover letter request failed entirely.");
-        btn.textContent = "Generate Cover Letter";
+
+      if (!result || result.error || !result.cover_letter) {
+        alert("JobBot: Cover letter generation failed. Is Ollama running?");
+        coverBtn.innerHTML = '<span style="font-size:14px;">✍️</span> Generate Cover Letter';
         return;
       }
-      if (result.error) {
-        alert(`JobBot: Cover letter failed — ${result.error}`);
-        btn.textContent = "Generate Cover Letter";
-        return;
-      }
-      if (!result.cover_letter) {
-        alert(
-          "JobBot: Cover letter came back empty. Is Ollama running with the correct model?",
-        );
-        btn.textContent = "Generate Cover Letter";
-        return;
-      }
+
       document.getElementById("jb-cover-text").value = result.cover_letter;
       document.getElementById("jb-cover-box").style.display = "block";
-      btn.textContent = "Regenerate";
+      document.getElementById("jb-cover-meta").textContent = `${result.cover_letter.split(/\s+/).length} words`;
+      coverBtn.innerHTML = '<span style="font-size:14px;">🔄</span> Regenerate';
     };
 
     document.getElementById("jb-paste").onclick = () => {
       const text = document.getElementById("jb-cover-text").value;
       const ok = pasteCoverLetter(text);
       const btn = document.getElementById("jb-paste");
-      btn.textContent = ok ? "Pasted!" : "No cover letter field found";
-      setTimeout(() => (btn.textContent = "Paste into Form"), 2000);
+      btn.innerHTML = ok ? '<span>✅</span> Pasted!' : '<span>❌</span> No field found';
+      setTimeout(() => btn.innerHTML = '<span>📋</span> Paste into Form', 2000);
     };
 
-    apiRequest("GET", `${SERVER}/`)
-      .then(() => {
-        const st = document.getElementById("jb-status");
-        st.textContent = "Server: connected";
-        st.style.color = "#10b981";
-      })
-      .catch(() => {
-        const st = document.getElementById("jb-status");
-        st.textContent = "Server: offline";
-        st.style.color = "#ef4444";
+    document.getElementById("jb-copy").onclick = () => {
+      const text = document.getElementById("jb-cover-text").value;
+      navigator.clipboard.writeText(text).then(() => {
+        const btn = document.getElementById("jb-copy");
+        btn.textContent = "✅";
+        setTimeout(() => btn.textContent = "📋", 1500);
       });
+    };
+
+    apiRequest("GET", `${SERVER}/`).then(() => {
+      document.getElementById("jb-status-dot").style.background = "#10b981";
+      document.getElementById("jb-status-text").textContent = "Server: connected";
+    }).catch(() => {
+      document.getElementById("jb-status-dot").style.background = "#ef4444";
+      document.getElementById("jb-status-text").textContent = "Server: offline";
+    });
 
     console.log("[JobBot] Panel created");
     return div;

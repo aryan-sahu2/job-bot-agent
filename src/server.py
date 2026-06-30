@@ -73,6 +73,8 @@ def get_profile():
         "notice_period_weeks": data.get("notice_period_weeks", ""),
         "expected_ctc": data.get("expected_ctc", ""),
         "expected_salary_usd_monthly": data.get("expected_salary_usd_monthly", ""),
+        "expected_salary_usd_yearly": data.get("expected_salary_usd_yearly", ""),
+        "skills": data.get("skills", ""),
         "referral_source": data.get("referral_source", ""),
         "custom_answers": data.get("custom_answers", {}),
         "raw": data.get("raw_bio", "") or json.dumps(data, indent=2),
@@ -238,6 +240,36 @@ Rules:
             # Strip any wrapping quotes or markdown
             text = re.sub(r'^["\']{1,2}|["\']{1,2}$', '', text)
             text = re.sub(r'^```\w*\n?|\n?```$', '', text)
+            return {"answer": text}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/expand-answer")
+async def expand_answer(payload: dict):
+    answer = payload.get("answer", "")
+    target = payload.get("target_words", 150)
+    question = payload.get("question", "")
+
+    prompt = f"""Expand the following answer to roughly {target} words. Keep the same tone and facts. Do not add fluff or buzzwords.
+
+Question: {question}
+Current answer ({len(answer.split())} words): {answer}
+
+Write only the expanded answer. No preamble."""
+
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(
+                config.llm_api,
+                json={
+                    "model": config.llm_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.4}
+                },
+            )
+            text = r.json().get("response", "").strip()
             return {"answer": text}
     except Exception as e:
         return {"error": str(e)}

@@ -12,11 +12,14 @@
   "portfolio": "https://dev-portfolio-4d2.pages.dev/",
   "notice_period_weeks": "0",
   "expected_ctc": "18-24 LPA INR",
-  "expected_salary_usd_monthly": "$1,800 - $2,400",
+  "expected_salary_usd_monthly": "$1,800 - $2,400 per month",
+  "expected_salary_usd_yearly": "$22,000 - $29,000 per year",
   "referral_source": "LinkedIn",
+  "skills": "React, Next.js, TypeScript, Node.js, PostgreSQL, AWS, Python",
   "custom_answers": {
-    "introduction": "Aryan Sahu — Full Stack Developer with 3+ years shipping production systems. I've built platforms from scratch (React, Node, PostgreSQL, AWS), handled zero-downtime deployments, and migrated legacy stacks to Next.js. I work end-to-end and prefer shipping over meetings.",
-    "motivation": "I'm looking for teams where I can own features end-to-end and work with modern stacks. Your role lines up with what I've been building lately."
+    "introduction": "I'm Aryan Sahu, a Full Stack Developer with 3.5 years of production experience building and shipping web applications at scale. I've delivered features for enterprise clients supporting 10M+ daily transactions, and I'm currently architecting Next.js systems for a Dubai-based startup. I handle everything from React frontends and Node APIs to PostgreSQL schema design and AWS/Nginx deployments. I like owning the full stack and prefer shipping working code over writing lengthy specs.",
+    "motivation": "I'm looking for teams where I can own features end-to-end and work with modern stacks. Your role lines up with what I've been building lately — particularly the Next.js and Node.js infrastructure work.",
+    "cover_letter": ""
   },
   "raw_bio": "Full Stack Developer with 3+ years of production experience building and shipping web applications at scale. Delivered features for enterprise clients (Vodafone India, Bank of Maharashtra) supporting 10M+ daily banking transactions; currently architecting production Next.js systems for a Dubai-based startup. Strong end-to-end ownership from React/Next.js frontends and Node.js API design to PostgreSQL schema architecture and AWS/Nginx production deployments.\n\nFull Stack Developer at Infravue Technologies (July 2025 - Present)\n- Architected and deployed production Next.js, Node.js and Python backend applications with PM2/Nginx across multiple subdomains, achieving zero-downtime deployments\n- Built Cloudflare Workers backend for serverless form processing, maintaining legacy infrastructure in parallel\n- Migrated legacy HTML/CSS/Three.js codebase to Next.js, reducing maintenance overhead by 40% while enhancing 3D animation performance\n\nFull Stack Developer (Co-Founder) at Kangagigs (March 2025 - July 2025)\n- Architected and shipped a full-stack job discovery platform (React, Node.js, PostgreSQL, Prisma) with JWT-secured REST APIs, independently deployed on AWS EC2\n- Scaled to 500+ registered users; led 3 UI/UX iterations reducing page load time by 35%\n\nApplication Engineer at Newgen Software Technologies (February 2023 - March 2025)\n- Delivered production features for enterprise clients (Vodafone India, Bank of Maharashtra) in Java and JavaScript, supporting systems processing 10M+ daily banking transactions\n\nBachelor of Engineering in Electronics and Telecommunication, D. Y. Patil College of Engineering, 8.67 CGPA\n\nSkills: React, Next.js, TypeScript, Tailwind CSS, Redux, Framer Motion, GSAP, Three.js, Node.js, Express.js, NestJS, REST APIs, JWT, PostgreSQL, Prisma, MongoDB, AWS EC2, Docker, Nginx, PM2, Cloudflare Workers, Linux, Java"
 }
