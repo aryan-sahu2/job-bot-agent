@@ -4,9 +4,11 @@ Searches multiple job boards, scores relevance with a local LLM (Ollama), and he
 
 ## Components
 
-- **`src/cli.py`** — Scrapes LinkedIn, Indeed, Wellfound, Greenhouse, Lever, Breezy, Recruitee, Workable, SmartRecruiters for jobs matching your config. Scores relevance via Ollama.
-- **`src/server.py`** — Local FastAPI server on `:8765` that serves your profile, latest jobs, and generates cover letters via Ollama.
-- **`jobbot-assistant.user.js`** — Tampermonkey userscript that injects a floating panel on job application pages (Greenhouse, Lever, Workday, LinkedIn, Indeed, and more). Fills profile fields and cover letters in one click.
+| Component | What it does |
+|---|---|
+| **`src/cli.py`** (Aggregator) | Scrapes LinkedIn, Indeed, Wellfound, Greenhouse, Lever, and other boards for jobs matching your config. Sends each description + your resume to Ollama for relevance scoring. Filters, deduplicates, and saves results. |
+| **`src/server.py`** (Local API) | FastAPI server on `:8765`. Serves your profile, latest jobs, and generates cover letters via Ollama. Must be running for the extension to work. |
+| **`jobbot-assistant.user.js`** (Extension) | Tampermonkey userscript that injects a floating panel on job application pages. Fills profile fields and generates cover letters in one click. |
 
 ## Quick Start
 
@@ -26,6 +28,38 @@ uv run python -m src.cli
 uv run python -m src.cli
 ```
 
+## What Each Command Does
+
+### `uv run python -m src.cli` — The Aggregator
+
+Scrapes LinkedIn, Indeed, Wellfound, and any Greenhouse/Lever/etc. boards you configured in `config.json`. Sends each job description + your `resume.txt` to your local Ollama LLM for scoring. Filters out jobs below score 20, excludes blacklisted keywords, filters by salary/hours/startup preferences, and deduplicates by URL.
+
+Saves two files:
+- `output/jobs_found_*.json` — full job data with scores and reasons
+- `output/jobs_to_apply_*.txt` — plain list of URLs to open
+
+This is purely for discovery. If you already know which jobs to apply to, you can skip it entirely.
+
+### `uv run python src/server.py` — The Local API
+
+Starts a FastAPI web server on `http://127.0.0.1:8765`. Exposes three endpoints the browser extension talks to:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /profile` | Reads `resume.txt`, parses your name/email/phone |
+| `GET /jobs` | Returns the latest aggregated JSON |
+| `POST /cover-letter` | Takes job description + your profile, sends to Ollama, returns generated text |
+
+This must be running for the extension buttons to work. If it's off, "Fill Profile" and "Generate Cover Letter" will fail.
+
+### The Extension Panel
+
+The extension injects a floating panel into any job application page:
+
+- **Fill Profile** — fetches `resume.txt` from the server and injects values into form fields
+- **Generate Cover Letter** — scrapes the job description from the current page, sends it to the server, which forwards it to Ollama, then returns the text
+- **Paste into Form** — injects that text into the cover letter textarea
+
 ## Apply Workflow
 
 ```bash
@@ -44,6 +78,27 @@ uv run python src/server.py
 #    "Generate Cover Letter" → scrapes job description, generates tailored letter via Ollama
 #    Upload your resume manually, review, and submit
 ```
+
+## What Depends on What
+
+| Step | Required by | Can skip if... |
+|---|---|---|
+| Aggregator (`src.cli`) | Nothing (optional) | You already know which jobs to apply to, or you're browsing job boards manually |
+| Server (`src.server.py`) | Extension buttons (Fill Profile, Generate Cover Letter) | You only want the raw job list from the aggregator, or you plan to apply manually without auto-fill |
+| Extension | The server must be running | You can apply manually without the extension. The extension is just a convenience layer |
+
+## Real Scenarios
+
+| Scenario | What to run |
+|---|---|
+| **Full workflow (recommended)** | Run aggregator → start server → open URLs from `jobs_to_apply_*.txt` → use extension |
+| **I already have job tabs open** | Just start the server. Skip the aggregator. Use the extension on any job page |
+| **I just want a curated list** | Just run the aggregator. Open the JSON or `jobs-view` in browser. Apply manually |
+| **I want to apply on a job board the aggregator didn't scrape** | Start the server. Navigate there manually. The extension works on any page |
+
+## The Only Hard Rule
+
+The server must be running for the extension features to work. The extension is a dumb client — it doesn't talk to Ollama directly. It talks to your local server (`127.0.0.1:8765`), and the server talks to Ollama. Everything else is optional.
 
 ## Configuration
 

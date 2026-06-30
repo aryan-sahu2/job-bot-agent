@@ -1,18 +1,19 @@
 """
 JobBot Assistant Server
-Run: uv run python src/server.py
+Run: uv run python -m src.server
 """
 
 import json
+import sys
 from pathlib import Path
+
+# Allow `python src/server.py` / `python -m src.server`
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponseimport sys
-from pathlib import Path
-
-
+from fastapi.responses import HTMLResponse
 
 from src.config import load_config
 
@@ -52,7 +53,18 @@ def get_profile():
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
     name = lines[0] if lines else "Applicant"
     email = next((line for line in lines if "@" in line), "")
-    phone = next((line for line in lines if any(c.isdigit() for c in line) and len(line) > 9), "")
+    
+    # Better phone detection: must contain digits AND look like a phone number
+    phone = ""
+    for line in lines:
+        if "@" in line:
+            continue  # skip emails
+        digits = ''.join(c for c in line if c.isdigit())
+        if len(digits) >= 10 and len(digits) <= 15:
+            # Looks like a phone number (10-15 digits)
+            phone = line
+            break
+    
     parts = name.split()
     return {
         "name": name,
@@ -62,7 +74,6 @@ def get_profile():
         "phone": phone,
         "raw": raw,
     }
-
 
 @app.get("/jobs")
 def get_jobs():
@@ -135,8 +146,5 @@ async def cover_letter(payload: dict):
 
 if __name__ == "__main__":
     import uvicorn
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    uvicorn.run("src.server:app", host="127.0.0.1", port=8765, reload=False, log_level="info")
-    # Allow `python src/server.py` to resolve `from src.config import ...`
+    uvicorn.run("src.server:app", host="0.0.0.0", port=8765, reload=False, log_level="info")
 

@@ -3,125 +3,326 @@
     if (window.__jobbotLoaded) return;
     window.__jobbotLoaded = true;
 
-    const SERVER = 'http://127.0.0.1:8765';
+    const SERVER = 'http://localhost:8765';
     let panel = null;
     let profileCache = null;
 
-    const PLATFORMS = {
-        greenhouse: {
-            test: () => /greenhouse\.io/.test(location.hostname),
-            selectors: {
-                firstName: 'input[name="job_application[first_name]"], input#first_name',
-                lastName: 'input[name="job_application[last_name]"], input#last_name',
-                fullName: 'input[name="job_application[full_name]"]',
-                email: 'input[name="job_application[email]"], input[type="email"]',
-                phone: 'input[name="job_application[phone]"]',
-                coverLetter: 'textarea[name="job_application[cover_letter]"], textarea#cover_letter, textarea[name="job_application[cover_letter_body]"]'
-            }
-        },
-        lever: {
-            test: () => /lever\.co/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="name"]',
-                email: 'input[name="email"]',
-                phone: 'input[name="phone"]',
-                coverLetter: 'textarea[name="comments"], textarea[data-qa="cover-letter"], textarea[name="coverLetter"]'
-            }
-        },
-        workable: {
-            test: () => /workable\.com/.test(location.hostname) || /apply\.workable\.com/.test(location.hostname),
-            selectors: {
-                firstName: 'input[name="candidate[first_name]"]',
-                lastName: 'input[name="candidate[last_name]"]',
-                fullName: 'input[name="candidate[name]"]',
-                email: 'input[name="candidate[email]"]',
-                phone: 'input[name="candidate[phone]"]',
-                coverLetter: 'textarea[name="candidate[cover_letter]"]'
-            }
-        },
-        linkedin: {
-            test: () => /linkedin\.com/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="firstName"], input[id*="name"]',
-                email: 'input[name="email"]',
-                phone: 'input[name="phoneNumber"]',
-                coverLetter: 'textarea[aria-describedby*="cover-letter"], textarea[name="coverLetter"]'
-            }
-        },
-        indeed: {
-            test: () => /indeed\.com/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="name"], input[placeholder*="Full name" i]',
-                email: 'input[name="email"], input[type="email"]',
-                phone: 'input[name="phone"], input[type="tel"]',
-                coverLetter: 'textarea[name="coverletter"], textarea[placeholder*="cover letter" i]'
-            }
-        },
-        breezy: {
-            test: () => /breezy\.hr/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="name"]',
-                email: 'input[name="email"]',
-                phone: 'input[name="phone"]',
-                coverLetter: 'textarea[name="cover_letter"]'
-            }
-        },
-        recruitee: {
-            test: () => /recruitee\.com/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="candidate[name]"]',
-                email: 'input[name="candidate[email]"]',
-                phone: 'input[name="candidate[phone]"]',
-                coverLetter: 'textarea[name="candidate[cover_letter]"]'
-            }
-        },
-        smartrecruiters: {
-            test: () => /smartrecruiters\.com/.test(location.hostname),
-            selectors: {
-                firstName: 'input[name="firstName"]',
-                lastName: 'input[name="lastName"]',
-                email: 'input[name="email"]',
-                phone: 'input[name="phone"]',
-                coverLetter: 'textarea[name="coverLetter"]'
-            }
-        },
-        ashby: {
-            test: () => /ashby\.hq/.test(location.hostname),
-            selectors: {
-                fullName: 'input[name="name"]',
-                email: 'input[name="email"]',
-                phone: 'input[name="phone"]',
-                coverLetter: 'textarea[name="coverLetter"]'
-            }
-        },
-        workday: {
-            test: () => /myworkdayjobs\.com/.test(location.hostname) || /workday\.com/.test(location.hostname),
-            selectors: {
-                fullName: 'input[data-automation-id="fullName"], input[aria-label*="Name" i]',
-                email: 'input[data-automation-id="email"], input[type="email"]',
-                phone: 'input[data-automation-id="phone"], input[type="tel"]',
-                coverLetter: 'textarea[data-automation-id="coverLetter"], textarea[aria-label*="cover letter" i]'
-            }
+    // ===== HYBRID API =====
+    function apiRequest(method, url, data) {
+        if (typeof GM_xmlhttpRequest !== 'undefined') {
+            return new Promise((resolve, reject) => {
+                GM_xmlhttpRequest({
+                    method: method, url: url,
+                    headers: data ? { 'Content-Type': 'application/json' } : {},
+                    data: data ? JSON.stringify(data) : null,
+                    responseType: 'json',
+                    onload: (res) => {
+                        if (res.status >= 200 && res.status < 300) {
+                            try { resolve(JSON.parse(res.responseText)); }
+                            catch (e) { resolve(res.responseText); }
+                        } else { reject(new Error('HTTP ' + res.status)); }
+                    },
+                    onerror: reject
+                });
+            });
         }
-    };
-
-    function detectPlatform() {
-        for (const [name, cfg] of Object.entries(PLATFORMS)) {
-            if (cfg.test()) return { name, selectors: cfg.selectors };
-        }
-        return { name: 'generic', selectors: {} };
+        const options = { method: method, headers: data ? { 'Content-Type': 'application/json' } : {} };
+        if (data && method !== 'GET') options.body = JSON.stringify(data);
+        return fetch(url, options).then(res => {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const ct = res.headers.get('content-type');
+            return (ct && ct.includes('json')) ? res.json() : res.text();
+        });
     }
 
-    function fillField(selector, value) {
-        if (!selector || !value) return false;
-        const el = document.querySelector(selector);
-        if (!el) return false;
+    // ===== UNIVERSAL FIELD FINDER =====
+    function getAllTextClues(el) {
+        const clues = [];
+        const add = (s) => { if (s) clues.push(s.toLowerCase().trim()); };
+
+        // Direct attributes
+        add(el.placeholder);
+        add(el.name);
+        add(el.id);
+        add(el.getAttribute('aria-label'));
+        add(el.getAttribute('data-testid'));
+        add(el.getAttribute('automation-id'));
+        add(el.getAttribute('data-automation-id'));
+        add(el.getAttribute('aria-labelledby'));
+
+        // Type hint
+        if (el.type && el.type !== 'text') add(el.type);
+
+        // Associated labels
+        if (el.labels) Array.from(el.labels).forEach(l => add(l.innerText));
+
+        // aria-labelledby dereference
+        const lbId = el.getAttribute('aria-labelledby');
+        if (lbId) {
+            lbId.split(/\s+/).forEach(id => {
+                const el2 = document.getElementById(id);
+                if (el2) add(el2.innerText);
+            });
+        }
+
+        // Parent chain (up to 4 levels)
+        let parent = el.parentElement;
+        for (let i = 0; i < 4 && parent; i++) {
+            if (parent.tagName === 'LABEL') add(parent.innerText);
+            // Look for label-like child
+            const labelChild = parent.querySelector('label, .label, [class*="label"]');
+            if (labelChild && labelChild !== el) add(labelChild.innerText);
+            parent = parent.parentElement;
+        }
+
+        // Previous siblings
+        let prev = el.previousElementSibling;
+        for (let i = 0; i < 3 && prev; i++) {
+            add(prev.innerText);
+            prev = prev.previousElementSibling;
+        }
+
+        // Grandparent first line (for grouped fields with headers)
+        const gp = el.parentElement?.parentElement;
+        if (gp) {
+            const firstLine = gp.innerText?.split('\n')[0]?.trim();
+            if (firstLine && firstLine.length < 100) add(firstLine);
+        }
+
+        return clues.filter(c => c.length > 0);
+    }
+
+    function scoreField(clues, fieldType) {
+        const patterns = {
+            firstName: {
+                strong: ['first name', 'firstname', 'first-name', 'given name', 'fname', 'first_name', 'first name '],
+                weak: ['first', 'name', 'fname'],
+                avoid: ['last', 'company', 'business', 'user name', 'username']
+            },
+            lastName: {
+                strong: ['last name', 'lastname', 'last-name', 'surname', 'family name', 'lname', 'last_name'],
+                weak: ['last', 'name'],
+                avoid: ['first', 'company', 'business', 'maiden']
+            },
+            fullName: {
+                strong: ['full name', 'fullname', 'full-name', 'your name', 'applicant name', 'complete name'],
+                weak: ['name'],
+                avoid: ['company', 'business', 'user name', 'username', 'first name', 'last name', 'email']
+            },
+            email: {
+                strong: ['email', 'e-mail', 'email address', 'e mail', 'mail address', 'contact email'],
+                weak: ['mail'],
+                avoid: ['confirm', 'verify', 're-enter', 'reenter', 'repeat', 'secondary', 'alternative', 'phone']
+            },
+            phone: {
+                strong: ['phone', 'mobile', 'cell', 'telephone', 'contact number', 'phone number', 'cellphone', 'tel', 'mobile number'],
+                weak: ['number', 'contact'],
+                avoid: ['years', 'experience', 'salary', 'age', 'postal', 'zip', 'count']
+            },
+            yearsExperience: {
+                strong: ['years of experience', 'years experience', 'experience', 'yoe', 'years of work', 'how many years'],
+                weak: ['years'],
+                avoid: ['salary', 'age', 'phone']
+            },
+            salary: {
+                strong: ['salary', 'expected salary', 'current salary', 'compensation', 'pay'],
+                weak: ['amount', 'range'],
+                avoid: ['years', 'experience']
+            },
+            coverLetter: {
+                strong: ['cover letter', 'coverletter', 'cover_letter', 'message', 'additional information', 'why', 'tell us about', 'note', 'comments'],
+                weak: ['letter', 'additional'],
+                avoid: ['resume', 'cv']
+            },
+            linkedin: {
+                strong: ['linkedin', 'linked in', 'linkedin profile', 'linkedin url'],
+                weak: ['social', 'profile url'],
+                avoid: []
+            },
+            website: {
+                strong: ['website', 'portfolio', 'personal site', 'url', 'github', 'gitlab'],
+                weak: ['link', 'site'],
+                avoid: ['linkedin']
+            }
+        };
+
+        const p = patterns[fieldType];
+        if (!p) return 0;
+
+        let score = 0;
+        const allText = clues.join(' ');
+
+        for (const c of clues) {
+            for (const s of p.strong) {
+                if (c === s) score += 15;
+                else if (c.includes(s)) score += 8;
+            }
+            for (const w of p.weak) {
+                if (c === w) score += 4;
+                else if (c.includes(w)) score += 2;
+            }
+            for (const a of p.avoid) {
+                if (c.includes(a)) score -= 6;
+            }
+        }
+
+        // Type bonuses
+        if (fieldType === 'email' && clues.some(c => c.includes('@'))) score += 3;
+        if (fieldType === 'phone' && clues.some(c => /\+?\d{3,}/.test(c))) score += 3;
+        if (fieldType === 'yearsExperience' && clues.some(c => /\d+\+?\s*years?/.test(c))) score += 5;
+
+        return score;
+    }
+
+    function findBestInputs() {
+        const allInputs = Array.from(document.querySelectorAll('input, textarea, select'));
+
+        const visibleInputs = allInputs.filter(el => {
+            const style = window.getComputedStyle(el);
+            const rect = el.getBoundingClientRect();
+            return style.display !== 'none' && 
+                   style.visibility !== 'hidden' && 
+                   rect.width > 5 && rect.height > 5 &&
+                   !el.disabled &&
+                   !el.readOnly;
+        });
+
+        console.log(`[JobBot] Found ${visibleInputs.length} visible inputs out of ${allInputs.length}`);
+
+        const candidates = {};
+        const assigned = new Set();
+        const types = ['firstName', 'lastName', 'fullName', 'email', 'phone', 'yearsExperience', 'salary', 'coverLetter', 'linkedin', 'website'];
+
+        for (const type of types) {
+            let best = null;
+            let bestScore = 0;
+
+            for (const el of visibleInputs) {
+                if (assigned.has(el)) continue;
+                const clues = getAllTextClues(el);
+                const s = scoreField(clues, type);
+                if (s > bestScore) {
+                    bestScore = s;
+                    best = el;
+                }
+            }
+
+            if (best && bestScore >= 5) {
+                candidates[type] = best;
+                assigned.add(best);
+                console.log(`[JobBot] MATCH ${type} (score ${bestScore}): clues=[${getAllTextClues(best).slice(0,4).join(', ')}]`);
+            }
+        }
+
+        // Log unmatched inputs for debugging
+        const unmatched = visibleInputs.filter(el => !assigned.has(el));
+        if (unmatched.length > 0) {
+            console.log(`[JobBot] ${unmatched.length} unmatched inputs:`);
+            unmatched.slice(0, 5).forEach(el => {
+                console.log(`  - ${el.tagName} type=${el.type} name=${el.name} clues=[${getAllTextClues(el).slice(0,3).join(', ')}]`);
+            });
+        }
+
+        return candidates;
+    }
+
+    // ===== REACT-PROOF VALUE SETTER =====
+    function setInputValue(el, value) {
+        if (!el || value === undefined || value === null || value === '') return false;
+
         el.focus();
-        el.value = value;
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        el.blur();
+        el.scrollIntoView({ behavior: 'instant', block: 'center' });
+
+        // Method 1: Native setter (bypasses React)
+        const proto = el.tagName === 'TEXTAREA' ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+        const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
+        if (descriptor && descriptor.set) {
+            descriptor.set.call(el, value);
+        } else {
+            el.value = value; // fallback
+        }
+
+        // Method 2: Trigger all events frameworks listen for
+        const events = [
+            new Event('focus', { bubbles: true }),
+            new Event('keydown', { bubbles: true, cancelable: true }),
+            new Event('keypress', { bubbles: true, cancelable: true }),
+            new InputEvent('input', { bubbles: true, cancelable: true, inputType: 'insertText' }),
+            new Event('keyup', { bubbles: true, cancelable: true }),
+            new Event('change', { bubbles: true }),
+            new Event('blur', { bubbles: true })
+        ];
+
+        for (const ev of events) {
+            el.dispatchEvent(ev);
+        }
+
         return true;
+    }
+
+    // ===== FORM FILLING =====
+    function fillForm(profile) {
+        console.log('[JobBot] === Starting form fill ===');
+        console.log('[JobBot] Profile:', JSON.stringify({
+            name: profile.name,
+            email: profile.email,
+            phone: profile.phone,
+            hasLinkedIn: !!profile.linkedin
+        }));
+
+        const fields = findBestInputs();
+        let filled = 0;
+        const log = [];
+
+        const nameParts = (profile.name || '').split(/\s+/).filter(p => p.length > 0);
+        const firstName = nameParts[0] || '';
+        const lastName = nameParts.slice(1).join(' ') || '';
+
+        // Name strategy: prefer first+last, fallback to full
+        if (fields.firstName && firstName) {
+            if (setInputValue(fields.firstName, firstName)) { filled++; log.push('firstName'); }
+        }
+        if (fields.lastName && lastName) {
+            if (setInputValue(fields.lastName, lastName)) { filled++; log.push('lastName'); }
+        }
+        if (!fields.firstName && !fields.lastName && fields.fullName && profile.name) {
+            if (setInputValue(fields.fullName, profile.name)) { filled++; log.push('fullName'); }
+        }
+        // If we have first+last but no fullName field, and there's a leftover name field, skip it
+
+        if (fields.email && profile.email) {
+            if (setInputValue(fields.email, profile.email)) { filled++; log.push('email'); }
+        }
+
+        if (fields.phone && profile.phone && !profile.phone.includes('@')) {
+            if (setInputValue(fields.phone, profile.phone)) { filled++; log.push('phone'); }
+        }
+
+        if (fields.linkedin && profile.linkedin) {
+            if (setInputValue(fields.linkedin, profile.linkedin)) { filled++; log.push('linkedin'); }
+        }
+        if (fields.website && profile.website) {
+            if (setInputValue(fields.website, profile.website)) { filled++; log.push('website'); }
+        }
+
+        console.log(`[JobBot] === Filled ${filled} fields: ${log.join(', ')} ===`);
+        return filled;
+    }
+
+    function pasteCoverLetter(text) {
+        const fields = findBestInputs();
+        if (fields.coverLetter) {
+            return setInputValue(fields.coverLetter, text);
+        }
+        // Fallback: any large textarea not already matched
+        const textareas = Array.from(document.querySelectorAll('textarea')).filter(el => {
+            const style = window.getComputedStyle(el);
+            return style.display !== 'none' && style.visibility !== 'hidden' && el.offsetHeight > 80;
+        });
+        if (textareas.length === 1) {
+            return setInputValue(textareas[0], text);
+        }
+        return false;
     }
 
     function getDescription() {
@@ -144,11 +345,10 @@
     async function fetchProfile() {
         if (profileCache) return profileCache;
         try {
-            const r = await fetch(`${SERVER}/profile`);
-            if (!r.ok) throw new Error('bad response');
-            profileCache = await r.json();
+            profileCache = await apiRequest('GET', `${SERVER}/profile`);
             return profileCache;
         } catch (e) {
+            console.error('[JobBot] Cannot reach server:', e);
             return null;
         }
     }
@@ -157,56 +357,19 @@
         const profile = await fetchProfile();
         if (!profile) return null;
         try {
-            const r = await fetch(`${SERVER}/cover-letter`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    profile,
-                    job_title: title || document.title,
-                    company: company || '',
-                    description: getDescription()
-                })
+            return await apiRequest('POST', `${SERVER}/cover-letter`, {
+                profile,
+                job_title: title || document.title,
+                company: company || '',
+                description: getDescription()
             });
-            const data = await r.json();
-            return data.cover_letter || null;
         } catch (e) {
+            console.error('[JobBot] Cover letter failed:', e);
             return null;
         }
     }
 
-    function fillForm(profile) {
-        const p = detectPlatform();
-        const s = p.selectors;
-        let n = 0;
-
-        if (s.firstName && s.lastName) {
-            const parts = (profile.name || '').split(' ');
-            if (fillField(s.firstName, parts[0])) n++;
-            if (fillField(s.lastName, parts.slice(1).join(' '))) n++;
-        } else if (s.fullName) {
-            if (fillField(s.fullName, profile.name)) n++;
-        }
-
-        if (fillField(s.email, profile.email)) n++;
-        if (fillField(s.phone, profile.phone)) n++;
-
-        if (!n) {
-            // Generic fallback heuristics
-            document.querySelectorAll('input').forEach(inp => {
-                const nm = (inp.name || '').toLowerCase();
-                const ph = (inp.placeholder || '').toLowerCase();
-                const id = (inp.id || '').toLowerCase();
-                if ((inp.type === 'email' || nm.includes('email') || ph.includes('email') || id.includes('email')) && profile.email) {
-                    inp.value = profile.email; inp.dispatchEvent(new Event('input', {bubbles:true})); n++;
-                }
-                if ((nm.includes('phone') || nm.includes('tel') || ph.includes('phone') || id.includes('phone')) && profile.phone) {
-                    inp.value = profile.phone; inp.dispatchEvent(new Event('input', {bubbles:true})); n++;
-                }
-            });
-        }
-        return n;
-    }
-
+    // ===== UI =====
     function createPanel() {
         if (panel) return panel;
         const div = document.createElement('div');
@@ -240,7 +403,7 @@
             btn.textContent = 'Filling...';
             const profile = await fetchProfile();
             if (!profile) {
-                alert('JobBot: Cannot reach local server. Run: uv run python src/server.py');
+                alert('JobBot: Cannot reach local server. Make sure you ran: uv run python src/server.py');
                 btn.textContent = 'Fill Profile';
                 return;
             }
@@ -255,32 +418,36 @@
             const h1 = document.querySelector('h1, h2');
             const title = h1 ? h1.innerText.trim() : document.title;
             const company = document.querySelector('[class*="company"], [class*="employer"]')?.innerText.trim() || '';
-            const letter = await generateLetter(title, company);
-            if (!letter) {
-                alert('JobBot: Cover letter failed. Is Ollama running?');
+            const result = await generateLetter(title, company);
+            if (!result) {
+                alert('JobBot: Cover letter request failed entirely.');
                 btn.textContent = 'Generate Cover Letter';
                 return;
             }
-            document.getElementById('jb-cover-text').value = letter;
+            if (result.error) {
+                alert(`JobBot: Cover letter failed — ${result.error}`);
+                btn.textContent = 'Generate Cover Letter';
+                return;
+            }
+            if (!result.cover_letter) {
+                alert('JobBot: Cover letter came back empty. Is Ollama running with the correct model?');
+                btn.textContent = 'Generate Cover Letter';
+                return;
+            }
+            document.getElementById('jb-cover-text').value = result.cover_letter;
             document.getElementById('jb-cover-box').style.display = 'block';
             btn.textContent = 'Regenerate';
         };
 
         document.getElementById('jb-paste').onclick = () => {
             const text = document.getElementById('jb-cover-text').value;
-            const p = detectPlatform();
-            let ok = false;
-            if (p.selectors.coverLetter) ok = fillField(p.selectors.coverLetter, text);
-            if (!ok) {
-                const ta = document.querySelector('textarea[placeholder*="cover" i], textarea[name*="cover" i], textarea[id*="cover" i], textarea');
-                if (ta) { ta.value = text; ta.dispatchEvent(new Event('input', {bubbles:true})); ok = true; }
-            }
+            const ok = pasteCoverLetter(text);
             const btn = document.getElementById('jb-paste');
             btn.textContent = ok ? 'Pasted!' : 'No cover letter field found';
             setTimeout(() => btn.textContent = 'Paste into Form', 2000);
         };
 
-        fetch(`${SERVER}/`).then(r => r.json()).then(() => {
+        apiRequest('GET', `${SERVER}/`).then(() => {
             const st = document.getElementById('jb-status');
             st.textContent = 'Server: connected'; st.style.color = '#10b981';
         }).catch(() => {
@@ -288,6 +455,7 @@
             st.textContent = 'Server: offline'; st.style.color = '#ef4444';
         });
 
+        console.log('[JobBot] Panel created');
         return div;
     }
 
@@ -297,7 +465,6 @@
     }
 
     document.addEventListener('keydown', e => {
-        // Cmd+Shift+K on Mac, Ctrl+Shift+K on Windows/Linux
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === 'k') {
             e.preventDefault();
             toggle();
@@ -305,8 +472,11 @@
     });
 
     if (/apply|careers|jobs|posting|application/.test(location.pathname + location.search)) {
-        setTimeout(createPanel, 1500);
+        setTimeout(() => {
+            console.log('[JobBot] Auto-creating panel on job page');
+            createPanel();
+        }, 1500);
     }
 
-    console.log('JobBot loaded. Press Cmd/Ctrl+Shift+K to toggle panel.');
+    console.log('[JobBot] Loaded. Press Cmd+Shift+K to toggle panel.');
 })();
