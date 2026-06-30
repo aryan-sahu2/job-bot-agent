@@ -91,7 +91,7 @@ def main():
 
     print("\nNext steps:")
     print("  1. uv run python src/server.py")
-    print("  2. Install jobbot-assistant.user.js in Tampermonkey")
+    print("  2. Install jobbot-extension/content.js in Tampermonkey")
     print("  3. Open job URLs from output/jobs_to_apply/*.txt")
 
 if __name__ == "__main__":

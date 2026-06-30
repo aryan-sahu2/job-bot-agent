@@ -1,190 +1,202 @@
-The Core Problem:
-Your browser extension is using GM_xmlhttpRequest (Tampermonkey's privileged API), but as a native Chrome Extension (loaded unpacked), that API doesn't exist. The error in your console says:
-plain
-content.js:178 [JobBot] Cannot reach server: ReferenceError: GM_xmlhttpRequest is not defined
-Why it worked with Tampermonkey but not as an unpacked extension:
-Table
-Tampermonkey Userscript	Native Chrome Extension
-Has GM_xmlhttpRequest	Does NOT have GM_xmlhttpRequest
-Bypasses CORS automatically	Must use fetch() with CORS headers
-Can call http://localhost from https:// pages	Blocked by mixed-content/CORS
-Two separate issues to fix:
-Fix 1: Replace GM_xmlhttpRequest with fetch() for native extension use
-In content.js, replace the apiRequest function:
-JavaScript
-// REPLACE this entire function:
-function apiRequest(method, url, data) {
-    return new Promise((resolve, reject) => {
-        GM_xmlhttpRequest({...})  // <-- This doesn't exist in extensions!
-    });
-}
-
-// WITH this:
-function apiRequest(method, url, data) {
-    const options = {
-        method: method,
-        headers: data ? { 'Content-Type': 'application/json' } : {},
-    };
-    if (data && method !== 'GET') {
-        options.body = JSON.stringify(data);
-    }
-    return fetch(url, options)
-        .then(res => {
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const ct = res.headers.get('content-type');
-            if (ct && ct.includes('application/json')) {
-                return res.json();
-            }
-            return res.text();
-        });
-}
-But wait — fetch() from a content script on https://indeed.com to http://localhost:8765 will be blocked by CORS. Your server already has CORS enabled, which is good. But you also need to add http://localhost:8765 to host_permissions in your manifest, which you already have.
-However, there's a subtlety: Manifest V3 content scripts use fetch() which respects CORS, but the server's CORS middleware should handle it. Let me verify your server CORS is actually working...
-Looking at your server.py, you have:
+Issues Found & Fixes
+1. Portfolio/Website URL not matched
+Your website pattern checks for portfolio, personal site, github, gitlab — but the field label is "Portfolio / Website URL". The / might cause issues, and more importantly, your server doesn't return a website field in the profile.
+Fix in server.py — add website extraction:
 Python
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-That looks correct. But the request might fail because Chrome extensions have additional restrictions. You should also check if the request is actually going out — look in the Network tab of DevTools (not just console) to see if the request to localhost:8765 is being made and what's happening.
-Fix 2: The "no fields filled" issue
-Even when Tampermonkey was working and the server was connected, fields weren't filling. Looking at your fillForm function, I see a logic issue:
-JavaScript
-function fillForm(profile) {
-    const p = detectPlatform();
-    const s = p.selectors;
-    let n = 0;
+# In server.py get_profile(), add after phone detection:
+website = ""
+for line in lines:
+    if "portfolio" in line.lower() or "github" in line.lower() or "pages.dev" in line:
+        if "://" in line:
+            website = line
+            break
 
-    if (s.firstName && s.lastName) {
-        // This branch only runs if BOTH selectors exist
-        const parts = (profile.name || '').split(' ');
-        if (fillField(s.firstName, parts[0])) n++;
-        if (fillField(s.lastName, parts.slice(1).join(' '))) n++;
-    } else if (s.fullName) {
-        // This only runs if NO firstName/lastName selectors
-        if (fillField(s.fullName, profile.name)) n++;
-    }
-    // ... rest
+# And return it:
+return {
+    "name": name,
+    "first_name": parts[0] if parts else "",
+    "last_name": parts[-1] if len(parts) > 1 else "",
+    "email": email,
+    "phone": phone,
+    "website": website,  # ADD THIS
+    "linkedin": linkedin,  # ADD THIS
+    "raw": raw,
 }
-Problem: On Indeed's Smart Apply, the selectors might not match. Your indeed selectors are:
+Fix in resume.txt — add explicit LinkedIn and website lines at top (or the server won't find them):
+txt
+Aryan Sahu
+aryanwin0609@gmail.com
++91 7058602394
+https://www.linkedin.com/in/aryan-sahu
+https://dev-portfolio-4d2.pages.dev/
+https://github.com/aryan-sahu2/
+2. LinkedIn URL not filled
+Your linkedin pattern exists but the server doesn't extract it from resume.txt. Same fix as above.
+3. Missing field types entirely
+Your extension doesn't handle these field types at all:
+Current / Last Role (job title/current position)
+Years of Experience (YOE/experience)
+Availability/Notice Period
+Expected CTC/Compensation
+How did you hear about us? (source/referral)
+Add to content.js patterns in scoreField():
 JavaScript
-fullName: 'input[name="name"], input[placeholder*="Full name" i]',
-email: 'input[name="email"], input[type="email"]',
-phone: 'input[name="phone"], input[type="tel"]',
-But Indeed's Smart Apply form might use different name attributes or no name at all. You need to inspect the actual DOM on the Indeed apply page.
-Also, your fallback logic only fires if (!n) — meaning if zero fields were filled by the primary selectors. But if fullName fails but email succeeds, n would be 1, and the fallback won't run. The phone might also fail. So you could end up with only email filled.
-Quick Diagnostic Steps
-Open DevTools on the Indeed apply page
-Go to Console tab — run this to test if fetch works:
+currentRole: {
+    strong: ['current role', 'last role', 'current position', 'job title', 'title', 'current job', 'present role', 'most recent role'],
+    weak: ['role', 'position', 'job'],
+    avoid: ['expected', 'desired', 'applying for']
+},
+noticePeriod: {
+    strong: ['availability', 'notice period', 'weeks notice', 'how soon', 'joining', 'available', 'start date', 'when can you'],
+    weak: ['notice', 'weeks', 'availability'],
+    avoid: ['salary', 'experience', 'age']
+},
+expectedCtc: {
+    strong: ['expected ctc', 'expected salary', 'compensation', 'expected pay', 'salary expectation', 'desired salary'],
+    weak: ['ctc', 'salary', 'pay', 'lpa', 'inr'],
+    avoid: ['current', 'last drawn']
+},
+referralSource: {
+    strong: ['how did you hear', 'source', 'referral', 'where did you find', 'how did you find', 'referred by'],
+    weak: ['hear', 'find', 'about us'],
+    avoid: []
+},
+Add to fillForm() in content.js:
 JavaScript
-fetch('http://localhost:8765/profile').then(r => r.json()).then(console.log).catch(console.error)
-Go to Network tab — check if requests to localhost:8765 are actually being made
-Inspect the form fields — run in console:
+if (fields.currentRole && profile.currentRole) {
+    if (setInputValue(fields.currentRole, profile.currentRole)) { filled++; log.push('currentRole'); }
+}
+if (fields.yearsExperience && profile.yearsExperience) {
+    if (setInputValue(fields.yearsExperience, profile.yearsExperience)) { filled++; log.push('yearsExperience'); }
+}
+if (fields.noticePeriod && profile.noticePeriod !== undefined) {
+    if (setInputValue(fields.noticePeriod, profile.noticePeriod)) { filled++; log.push('noticePeriod'); }
+}
+if (fields.expectedCtc && profile.expectedCtc) {
+    if (setInputValue(fields.expectedCtc, profile.expectedCtc)) { filled++; log.push('expectedCtc'); }
+}
+if (fields.referralSource && profile.referralSource) {
+    if (setInputValue(fields.referralSource, profile.referralSource)) { filled++; log.push('referralSource'); }
+}
+4. Server profile extraction needs to parse resume.txt better
+Replace get_profile() in server.py with this improved version:
+Python
+@app.get("/profile")
+def get_profile():
+    if not RESUME_PATH.exists():
+        return {"error": f"{RESUME_PATH} not found"}
+    raw = RESUME_PATH.read_text()
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    name = lines[0] if lines else "Applicant"
+    email = next((line for line in lines if "@" in line and "." in line.split("@")[-1]), "")
+    
+    # Better phone detection
+    phone = ""
+    for line in lines:
+        if "@" in line:
+            continue
+        digits = ''.join(c for c in line if c.isdigit())
+        if len(digits) >= 10 and len(digits) <= 15:
+            phone = line
+            break
+    
+    # Extract URLs
+    linkedin = ""
+    website = ""
+    github = ""
+    for line in lines:
+        if "linkedin.com" in line.lower():
+            linkedin = line
+        elif "github.com" in line.lower() or "gitlab.com" in line.lower():
+            github = line
+        elif "://" in line and not linkedin and not website and not github:
+            # Portfolio or other website
+            if not any(x in line.lower() for x in ["email", "phone", "tel:", "mailto:"]):
+                website = line
+    
+    # Extract experience years
+    years_experience = ""
+    for line in lines:
+        match = re.search(r'(\d+(?:\.\d+)?)\+?\s*years?', line, re.IGNORECASE)
+        if match:
+            years_experience = match.group(1)
+            break
+    
+    # Extract current role
+    current_role = ""
+    for i, line in enumerate(lines):
+        if any(k in line.lower() for k in ["full stack", "developer", "engineer", "architect", "manager"]):
+            if "at " in line.lower() or i < 5:  # Likely a role mention
+                current_role = line.replace("Full Stack Developer at", "").replace("at", "").strip()
+                if current_role:
+                    current_role = line
+                    break
+    
+    parts = name.split()
+    return {
+        "name": name,
+        "first_name": parts[0] if parts else "",
+        "last_name": parts[-1] if len(parts) > 1 else "",
+        "email": email,
+        "phone": phone,
+        "website": website or github,
+        "linkedin": linkedin,
+        "github": github,
+        "yearsExperience": years_experience,
+        "currentRole": "Full Stack Developer",  # Hardcode or parse from resume
+        "noticePeriod": "0",
+        "expectedCtc": "18-24 LPA",
+        "referralSource": "LinkedIn",
+        "raw": raw,
+    }
+5. Resume.txt needs structured metadata at top
+Replace your resume.txt with this header format so the server can extract fields reliably:
+txt
+Aryan Sahu
+aryanwin0609@gmail.com
++91 7058602394
+https://www.linkedin.com/in/aryan-sahu
+https://dev-portfolio-4d2.pages.dev/
+https://github.com/aryan-sahu2/
+Role: Full Stack Developer
+Experience: 3.5 years
+Notice Period: 0 weeks
+Expected CTC: 18-24 LPA
+Source: LinkedIn
+
+Full Stack Developer with 3+ years of production experience...
+6. Select dropdowns not handled
+The "How did you hear about us?" is likely a <select> dropdown. Your findBestInputs() only looks for input, textarea, select but setInputValue() doesn't handle <select> properly.
+Add to setInputValue() in content.js:
 JavaScript
-// See what inputs exist
-document.querySelectorAll('input').forEach(i => console.log(i.name, i.placeholder, i.id))
-Recommended Fix: Make it work as BOTH Tampermonkey userscript AND native extension
-Replace your apiRequest function with a hybrid approach:
-JavaScript
-function apiRequest(method, url, data) {
-    // Try GM_xmlhttpRequest first (Tampermonkey)
-    if (typeof GM_xmlhttpRequest !== 'undefined') {
-        return new Promise((resolve, reject) => {
-            GM_xmlhttpRequest({
-                method: method,
-                url: url,
-                headers: data ? { 'Content-Type': 'application/json' } : {},
-                data: data ? JSON.stringify(data) : null,
-                responseType: 'json',
-                onload: (res) => {
-                    if (res.status >= 200 && res.status < 300) {
-                        try { resolve(JSON.parse(res.responseText)); } 
-                        catch (e) { resolve(res.responseText); }
-                    } else {
-                        reject(new Error('HTTP ' + res.status));
-                    }
-                },
-                onerror: reject
-            });
-        });
+function setInputValue(el, value) {
+    if (!el || value === undefined || value === null || value === '') return false;
+    
+    // Handle select dropdowns
+    if (el.tagName === 'SELECT') {
+        const options = Array.from(el.options);
+        const match = options.find(opt => 
+            opt.text.toLowerCase().includes(value.toLowerCase()) ||
+            opt.value.toLowerCase().includes(value.toLowerCase())
+        );
+        if (match) {
+            el.value = match.value;
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+        }
+        return false;
     }
     
-    // Fallback to fetch (native extension)
-    const options = {
-        method: method,
-        headers: data ? { 'Content-Type': 'application/json' } : {},
-    };
-    if (data && method !== 'GET') {
-        options.body = JSON.stringify(data);
-    }
-    return fetch(url, options).then(res => {
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const ct = res.headers.get('content-type');
-        return (ct && ct.includes('json')) ? res.json() : res.text();
-    });
+    // ... rest of existing code
 }
-For the "fields not filling" issue
-Add better debugging and more robust selectors. Here's an improved fillForm:
-JavaScript
-function fillForm(profile) {
-    const p = detectPlatform();
-    const s = p.selectors;
-    let n = 0;
-
-    console.log('[JobBot] Platform detected:', p.name);
-    console.log('[JobBot] Profile:', profile);
-    console.log('[JobBot] Selectors:', s);
-
-    // Try structured name fields first
-    if (s.firstName && s.lastName) {
-        const parts = (profile.name || '').split(' ');
-        if (fillField(s.firstName, parts[0])) n++;
-        if (fillField(s.lastName, parts.slice(1).join(' '))) n++;
-    }
-    
-    // Also try fullName (don't use else-if)
-    if (s.fullName && !document.querySelector(s.firstName)?.value) {
-        if (fillField(s.fullName, profile.name)) n++;
-    }
-
-    if (fillField(s.email, profile.email)) n++;
-    if (fillField(s.phone, profile.phone)) n++;
-
-    // Always run fallback for any remaining empty fields
-    const inputs = document.querySelectorAll('input');
-    inputs.forEach(inp => {
-        if (inp.value) return; // already filled
-        const nm = (inp.name || '').toLowerCase();
-        const ph = (inp.placeholder || '').toLowerCase();
-        const id = (inp.id || '').toLowerCase();
-        const type = inp.type;
-        
-        if ((type === 'email' || nm.includes('email') || ph.includes('email') || id.includes('email')) && profile.email) {
-            inp.value = profile.email; 
-            inp.dispatchEvent(new Event('input', {bubbles:true})); 
-            n++;
-        }
-        if ((nm.includes('phone') || nm.includes('tel') || ph.includes('phone') || id.includes('phone') || type === 'tel') && profile.phone) {
-            inp.value = profile.phone; 
-            inp.dispatchEvent(new Event('input', {bubbles:true})); 
-            n++;
-        }
-        if ((nm.includes('name') || ph.includes('name') || id.includes('name')) && profile.name && !inp.value) {
-            inp.value = profile.name;
-            inp.dispatchEvent(new Event('input', {bubbles:true}));
-            n++;
-        }
-    });
-    
-    console.log(`[JobBot] Filled ${n} fields`);
-    return n;
-}
-Summary of changes needed:
+7. Add select elements to field scoring
+In findBestInputs(), visible inputs already includes select, but you need to make sure the scoring works for dropdowns. The current code should handle it since select elements have name, id, and associated labels.
+Quick Summary of Changes Needed
 Table
 File	Change
-content.js	Make apiRequest hybrid (GM_xmlhttpRequest + fetch fallback)
-content.js	Improve fillForm to not use else if, add more fallback selectors
-content.js	Add more console logging for debugging
-manifest.json	Consider adding "permissions": ["activeTab"] if needed
+resume.txt	Add structured header with URLs, role, experience, notice, CTC, source
+server.py	Enhance get_profile() to extract URLs, role, YOE, notice, CTC, source
+content.js	Add 4 new field patterns (currentRole, noticePeriod, expectedCtc, referralSource)
+content.js	Add fillForm() handlers for new fields
+content.js	Add <select> handling in setInputValue()
+content.js	Add website to fillForm() (it's defined but never called)

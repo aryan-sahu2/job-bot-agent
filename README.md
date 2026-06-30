@@ -8,7 +8,7 @@ Searches multiple job boards, scores relevance with a local LLM (Ollama), and he
 |---|---|
 | **`src/cli.py`** (Aggregator) | Scrapes LinkedIn, Indeed, Wellfound, Greenhouse, Lever, and other boards for jobs matching your config. Sends each description + your resume to Ollama for relevance scoring. Filters, deduplicates, and saves results. |
 | **`src/server.py`** (Local API) | FastAPI server on `:8765`. Serves your profile, latest jobs, and generates cover letters via Ollama. Must be running for the extension to work. |
-| **`jobbot-assistant.user.js`** (Extension) | Tampermonkey userscript that injects a floating panel on job application pages. Fills profile fields and generates cover letters in one click. |
+| **`jobbot-extension/content.js`** (Extension) | Tampermonkey userscript that injects a floating panel on job application pages. Fills profile fields and generates cover letters in one click. |
 
 ## Quick Start
 
@@ -69,7 +69,7 @@ uv run python src/server.py
 # 2. Install the Tampermonkey userscript:
 #    - Install Tampermonkey extension in your browser
 #    - Click Tampermonkey → "Create a new script"
-#    - Delete the default template, paste jobbot-assistant.user.js contents, save (Ctrl+S)
+    #    - Delete the default template, paste the content of jobbot-extension/content.js, save (Ctrl+S)
 
 # 3. Open any job URL from output/jobs_to_apply/*.txt
 

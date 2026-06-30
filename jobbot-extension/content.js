@@ -143,6 +143,26 @@
                 strong: ['website', 'portfolio', 'personal site', 'url', 'github', 'gitlab'],
                 weak: ['link', 'site'],
                 avoid: ['linkedin']
+            },
+            currentRole: {
+                strong: ['current role', 'last role', 'current position', 'job title', 'title', 'current job', 'present role', 'most recent role'],
+                weak: ['role', 'position', 'job'],
+                avoid: ['expected', 'desired', 'applying for']
+            },
+            noticePeriod: {
+                strong: ['availability', 'notice period', 'weeks notice', 'how soon', 'joining', 'available', 'start date', 'when can you'],
+                weak: ['notice', 'weeks', 'availability'],
+                avoid: ['salary', 'experience', 'age']
+            },
+            expectedCtc: {
+                strong: ['expected ctc', 'expected salary', 'compensation', 'expected pay', 'salary expectation', 'desired salary'],
+                weak: ['ctc', 'salary', 'pay', 'lpa', 'inr'],
+                avoid: ['current', 'last drawn']
+            },
+            referralSource: {
+                strong: ['how did you hear', 'source', 'referral', 'where did you find', 'how did you find', 'referred by'],
+                weak: ['hear', 'find', 'about us'],
+                avoid: []
             }
         };
 
@@ -191,7 +211,7 @@
 
         const candidates = {};
         const assigned = new Set();
-        const types = ['firstName', 'lastName', 'fullName', 'email', 'phone', 'yearsExperience', 'salary', 'coverLetter', 'linkedin', 'website'];
+        const types = ['firstName', 'lastName', 'fullName', 'email', 'phone', 'yearsExperience', 'salary', 'coverLetter', 'linkedin', 'website', 'currentRole', 'noticePeriod', 'expectedCtc', 'referralSource'];
 
         for (const type of types) {
             let best = null;
@@ -229,6 +249,21 @@
     // ===== REACT-PROOF VALUE SETTER =====
     function setInputValue(el, value) {
         if (!el || value === undefined || value === null || value === '') return false;
+
+        // Handle select dropdowns
+        if (el.tagName === 'SELECT') {
+            const options = Array.from(el.options);
+            const match = options.find(opt => 
+                opt.text.toLowerCase().includes(value.toLowerCase()) ||
+                opt.value.toLowerCase().includes(value.toLowerCase())
+            );
+            if (match) {
+                el.value = match.value;
+                el.dispatchEvent(new Event('change', { bubbles: true }));
+                return true;
+            }
+            return false;
+        }
 
         el.focus();
         el.scrollIntoView({ behavior: 'instant', block: 'center' });
@@ -303,6 +338,21 @@
         }
         if (fields.website && profile.website) {
             if (setInputValue(fields.website, profile.website)) { filled++; log.push('website'); }
+        }
+        if (fields.currentRole && profile.currentRole) {
+            if (setInputValue(fields.currentRole, profile.currentRole)) { filled++; log.push('currentRole'); }
+        }
+        if (fields.yearsExperience && profile.yearsExperience) {
+            if (setInputValue(fields.yearsExperience, profile.yearsExperience)) { filled++; log.push('yearsExperience'); }
+        }
+        if (fields.noticePeriod && profile.noticePeriod !== undefined) {
+            if (setInputValue(fields.noticePeriod, profile.noticePeriod)) { filled++; log.push('noticePeriod'); }
+        }
+        if (fields.expectedCtc && profile.expectedCtc) {
+            if (setInputValue(fields.expectedCtc, profile.expectedCtc)) { filled++; log.push('expectedCtc'); }
+        }
+        if (fields.referralSource && profile.referralSource) {
+            if (setInputValue(fields.referralSource, profile.referralSource)) { filled++; log.push('referralSource'); }
         }
 
         console.log(`[JobBot] === Filled ${filled} fields: ${log.join(', ')} ===`);

@@ -18,13 +18,12 @@ Replaces complex Playwright automation with a local FastAPI server + Tampermonke
 - Serves `GET /jobs-view` — HTML page to browse jobs
 - Proxies `POST /cover-letter` — generates tailored cover letters via Ollama
 
-### `jobbot-assistant.user.js`
+### `jobbot-extension/content.js`
 - Tampermonkey userscript that runs on any job application page
-- Platform-specific selectors for Greenhouse, Lever, Workday, LinkedIn, Indeed, Breezy, Recruitee, Workable, SmartRecruiters, Ashby
-- Generic heuristic fallback for unknown sites
+- Smart heuristic field detection (no hardcoded selectors)
 - "Fill Profile" — auto-fills name, email, phone
 - "Generate Cover Letter" — scrapes job description, generates via Ollama, pastes into form
-- Keyboard shortcut: `Ctrl+Shift+J` to toggle panel
+- Keyboard shortcut: `Ctrl+Shift+K` to toggle panel
 
 ## Workflow
 
@@ -36,7 +35,7 @@ uv run python -m src.cli
 # 3. Start the server (leave running)
 uv run python src/server.py
 
-# 4. Install jobbot-assistant.user.js in Tampermonkey
+# 4. Install jobbot-extension/content.js in Tampermonkey
 # 5. Open job URLs from output/jobs_to_apply/*.txt
 # 6. Click "Fill All" — then upload resume manually, review, and submit
 ```

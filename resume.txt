@@ -1,6 +1,14 @@
 Aryan Sahu
 aryanwin0609@gmail.com
 +91 7058602394
+https://www.linkedin.com/in/aryan-sahu
+https://dev-portfolio-4d2.pages.dev/
+https://github.com/aryan-sahu2/
+Role: Full Stack Developer
+Experience: 3.5 years
+Notice Period: 0 weeks
+Expected CTC: 18-24 LPA
+Source: LinkedIn
 
 Full Stack Developer with 3+ years of production experience building and shipping web applications at scale. Delivered features for enterprise clients (Vodafone India, Bank of Maharashtra) supporting 10M+ daily banking transactions; currently architecting production Next.js systems for a Dubai-based startup. Strong end-to-end ownership from React/Next.js frontends and Node.js API design to PostgreSQL schema architecture and AWS/Nginx production deployments.
 
@@ -30,7 +38,3 @@ Skills: React, Next.js, TypeScript, Tailwind CSS, Redux, Framer Motion, GSAP, Th
 Projects:
 - ICCS – Business Management Platform: Full-stack Next.js/NestJS/PostgreSQL platform with 16-table schema for service tickets, invoicing, inventory, and AMC contracts
 - Agency Site Recreations (ExoApe, Refokus, Obys): Pixel-perfect animated marketing sites using React, GSAP, Framer Motion, and ScrollTrigger
-
-LinkedIn: https://www.linkedin.com/in/aryan-sahu
-GitHub: https://github.com/aryan-sahu2
-Portfolio: https://dev-portfolio-4d2.pages.dev/
