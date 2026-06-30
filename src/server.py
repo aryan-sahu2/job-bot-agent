@@ -72,7 +72,9 @@ def get_profile():
         "website": data.get("portfolio", "") or data.get("github", ""),  # alias for extension
         "notice_period_weeks": data.get("notice_period_weeks", ""),
         "expected_ctc": data.get("expected_ctc", ""),
+        "expected_salary_usd_monthly": data.get("expected_salary_usd_monthly", ""),
         "referral_source": data.get("referral_source", ""),
+        "custom_answers": data.get("custom_answers", {}),
         "raw": data.get("raw_bio", "") or json.dumps(data, indent=2),
     }
     
@@ -176,6 +178,67 @@ async def cover_letter(payload: dict):
             )
             text = r.json().get("response", "").strip()
             return {"cover_letter": text}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/answer-question")
+async def answer_question(payload: dict):
+    profile = payload.get("profile", {})
+    question = payload.get("question", "")
+    q_type = payload.get("question_type", "general")
+
+    raw = profile.get("raw_bio", "") or profile.get("raw", "")
+    expected_ctc = profile.get("expected_ctc", "")
+    notice = profile.get("notice_period_weeks", "")
+    current_role = profile.get("current_role", "")
+    years = profile.get("years_experience", "")
+    name = profile.get("name", "the applicant")
+
+    # Pre-computed fast answers (avoid LLM call)
+    if q_type == "salary" and expected_ctc:
+        return {"answer": expected_ctc}
+    if q_type == "availability" and notice:
+        return {"answer": "Immediate" if notice in ("0", 0, "0 weeks") else f"{notice} weeks"}
+
+    prompt = f"""You are {name}, a practical engineer answering a job application question. 
+Write like you talk to a colleague. No corporate buzzwords.
+
+Question: {question}
+
+Your background:
+{raw[:1500]}
+
+Current role: {current_role}
+Years of experience: {years}
+Expected CTC: {expected_ctc}
+Notice period: {notice}
+
+Rules:
+- Answer naturally and directly. No fluff.
+- Don't use: passionate, results-driven, innovative, dynamic, leveraging, holistic, synergy, proactive.
+- Stick to facts from your background. Don't invent experience.
+- If the question asks for a word count, respect it.
+- If it's about salary, state your range clearly.
+- If it's about availability, be direct.
+- Write only the answer text. No preamble like "Here is my answer:"""
+
+    try:
+        async with httpx.AsyncClient(timeout=config.llm_timeout) as client:
+            r = await client.post(
+                config.llm_api,
+                json={
+                    "model": config.llm_model,
+                    "prompt": prompt,
+                    "stream": False,
+                    "options": {"temperature": 0.4, "top_p": 0.9}
+                },
+            )
+            text = r.json().get("response", "").strip()
+            # Strip any wrapping quotes or markdown
+            text = re.sub(r'^["\']{1,2}|["\']{1,2}$', '', text)
+            text = re.sub(r'^```\w*\n?|\n?```$', '', text)
+            return {"answer": text}
     except Exception as e:
         return {"error": str(e)}
 

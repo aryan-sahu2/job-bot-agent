@@ -60,27 +60,29 @@
     add(el.getAttribute("automation-id"));
     add(el.getAttribute("data-automation-id"));
     add(el.getAttribute("aria-labelledby"));
+    add(el.getAttribute("aria-describedby"));
 
     // Type hint
     if (el.type && el.type !== "text") add(el.type);
 
-    // Associated labels
+    // Associated labels (by for=id match)
     if (el.labels) Array.from(el.labels).forEach((l) => add(l.innerText));
 
-    // aria-labelledby dereference
-    const lbId = el.getAttribute("aria-labelledby");
-    if (lbId) {
-      lbId.split(/\s+/).forEach((id) => {
-        const el2 = document.getElementById(id);
-        if (el2) add(el2.innerText);
-      });
-    }
+    // aria-labelledby / aria-describedby dereference
+    ["aria-labelledby", "aria-describedby"].forEach((attr) => {
+      const ids = el.getAttribute(attr);
+      if (ids) {
+        ids.split(/\s+/).forEach((id) => {
+          const el2 = document.getElementById(id);
+          if (el2) add(el2.innerText);
+        });
+      }
+    });
 
     // Parent chain (up to 4 levels)
     let parent = el.parentElement;
     for (let i = 0; i < 4 && parent; i++) {
       if (parent.tagName === "LABEL") add(parent.innerText);
-      // Look for label-like child
       const labelChild = parent.querySelector(
         'label, .label, [class*="label"]',
       );
@@ -95,7 +97,33 @@
       prev = prev.previousElementSibling;
     }
 
-    // Grandparent first line (for grouped fields with headers)
+    // Next siblings (labels sometimes appear after in odd DOM structures)
+    let next = el.nextElementSibling;
+    for (let i = 0; i < 2 && next; i++) {
+      if (
+        next.tagName === "LABEL" ||
+        (next.innerText && next.innerText.length < 100)
+      ) {
+        add(next.innerText);
+      }
+      next = next.nextElementSibling;
+    }
+
+    // CRITICAL: Look for ANY label inside the same field wrapper
+    // This catches React/Vue forms where label and input are siblings in a div.space-y-2
+    const container = el.closest(
+      '.space-y-2, .form-field, [class*="field"], [class*="form-group"], [class*="FormItem"], div',
+    );
+    if (container) {
+      const allLabels = container.querySelectorAll(
+        'label, [id*="Question"], [class*="label"], [class*="Label"]',
+      );
+      allLabels.forEach((lbl) => {
+        if (lbl !== el) add(lbl.innerText);
+      });
+    }
+
+    // Grandparent first line
     const gp = el.parentElement?.parentElement;
     if (gp) {
       const firstLine = gp.innerText?.split("\n")[0]?.trim();
@@ -305,9 +333,23 @@
           "portfolio_url",
           "personal portfolio",
           "your portfolio",
+          "behance",
+          "dribbble",
+          "xing",
+          "profilexing",
+          "social profile",
+          "professional profile",
         ],
-        weak: ["site", "url", "website", "link"],
-        avoid: ["github", "gitlab", "company", "business", "employer", "code"],
+        weak: ["site", "url", "website", "link", "profile"],
+        avoid: [
+          "github",
+          "gitlab",
+          "company",
+          "business",
+          "employer",
+          "code",
+          "linkedin",
+        ],
       },
       github: {
         strong: [
@@ -323,7 +365,14 @@
           "code repository",
         ],
         weak: ["code", "repo", "repository", "url", "git"],
-        avoid: ["portfolio", "website", "linkedin", "personal"],
+        avoid: [
+          "portfolio",
+          "website",
+          "linkedin",
+          "personal",
+          "behance",
+          "xing",
+        ],
       },
       website: {
         strong: ["website", "personal site", "url", "web"],
@@ -335,6 +384,8 @@
           "gitlab",
           "company",
           "business",
+          "behance",
+          "xing",
         ],
       },
       noticePeriod: {
@@ -469,18 +520,152 @@
       }
     }
 
-    // Log unmatched inputs for debugging
     const unmatched = visibleInputs.filter((el) => !assigned.has(el));
     if (unmatched.length > 0) {
       console.log(`[JobBot] ${unmatched.length} unmatched inputs:`);
-      unmatched.slice(0, 5).forEach((el) => {
+      unmatched.slice(0, 10).forEach((el) => {
         console.log(
-          `  - ${el.tagName} type=${el.type} name=${el.name} clues=[${getAllTextClues(el).slice(0, 3).join(", ")}]`,
+          `  - ${el.tagName} type=${el.type} name=${el.name} id=${el.id} clues=[${getAllTextClues(el).slice(0, 3).join(", ")}]`,
         );
       });
     }
 
-    return candidates;
+    return { candidates, unmatched };
+  }
+
+  // ===== CUSTOM QUESTION FILLER =====
+  async function fillCustomQuestions(profile, unmatchedInputs) {
+    const questions = [];
+
+    for (const el of unmatchedInputs) {
+      if (el.tagName !== "TEXTAREA" && el.type !== "text" && el.type !== "url")
+        continue;
+
+      const clues = getAllTextClues(el);
+      const labelText = clues.join(" ");
+
+      const hasQuestionMark = labelText.includes("?");
+      const hasInstructionWords =
+        /\b(write|describe|tell us|explain|share|what|how|why|please|brief|detail|answer|list)\b/.test(
+          labelText,
+        );
+      const hasQuestionWords =
+        /\b(introduction|about yourself|background|experience|salary|compensation|notice|availability|why|motivation|interest|challenge|strength|weakness|achievement|fit|qualification|project|skill)\b/.test(
+          labelText,
+        );
+
+      const isCustomQuestion =
+        hasQuestionMark || (hasInstructionWords && hasQuestionWords);
+      const isLargeField =
+        el.tagName === "TEXTAREA" ||
+        (el.maxLength && el.maxLength > 200) ||
+        (el.placeholder && el.placeholder.length > 30);
+
+      if (isCustomQuestion && isLargeField) {
+        let qType = "general";
+        const text = labelText;
+
+        if (
+          /\b(introduction|about yourself|background|bio|tell me about|who are you|describe yourself)\b/.test(
+            text,
+          )
+        )
+          qType = "introduction";
+        else if (
+          /\b(salary|compensation|pay|ctc|expected|desired.*monthly|desired.*yearly|monthly salary|yearly salary|pay range|remuneration)\b/.test(
+            text,
+          )
+        )
+          qType = "salary";
+        else if (
+          /\b(why.*company|why.*role|why.*apply|motivation|interest.*role|interest.*company|why do you want)\b/.test(
+            text,
+          )
+        )
+          qType = "motivation";
+        else if (
+          /\b(availability|notice|start.*date|when.*join|when.*start|how soon|available from)\b/.test(
+            text,
+          )
+        )
+          qType = "availability";
+        else if (
+          /\b(cover.*letter|additional.*info|anything else|supplement|message)\b/.test(
+            text,
+          )
+        )
+          qType = "cover";
+        else if (
+          /\b(experience.*relevant|relevant.*experience|why.*fit|why.*qualified|match.*role)\b/.test(
+            text,
+          )
+        )
+          qType = "fit";
+
+        questions.push({
+          element: el,
+          question: labelText,
+          type: qType,
+          rawLabel: clues[0] || labelText,
+        });
+      }
+    }
+
+    if (questions.length === 0) return 0;
+
+    let filled = 0;
+    for (const q of questions) {
+      let answer = "";
+      let usedLLM = false;
+
+      if (q.type === "salary" && profile.expected_ctc) {
+        answer = profile.expected_ctc;
+        if (
+          /monthly.*usd|usd.*month|\$.*month|per.*month.*usd/.test(
+            q.question,
+          ) &&
+          profile.expected_salary_usd_monthly
+        ) {
+          answer = profile.expected_salary_usd_monthly;
+        }
+      } else if (
+        q.type === "availability" &&
+        profile.notice_period_weeks !== undefined
+      ) {
+        answer =
+          profile.notice_period_weeks === "0" ||
+          profile.notice_period_weeks === 0
+            ? "Immediate"
+            : `${profile.notice_period_weeks} weeks`;
+      } else if (q.type === "introduction" && profile.custom_answers?.introduction) {
+        answer = profile.custom_answers.introduction;
+      } else if (q.type === "motivation" && profile.custom_answers?.motivation) {
+        answer = profile.custom_answers.motivation;
+      } else {
+        usedLLM = true;
+        try {
+          const result = await apiRequest("POST", `${SERVER}/answer-question`, {
+            profile: profile,
+            question: q.rawLabel,
+            question_type: q.type,
+          });
+          if (result && !result.error && result.answer) {
+            answer = result.answer;
+          }
+        } catch (e) {
+          console.error("[JobBot] Custom question LLM failed:", e);
+        }
+      }
+
+      if (answer && setInputValue(q.element, answer)) {
+        filled++;
+        console.log(
+          `[JobBot] Filled custom question (${q.type}${usedLLM ? "-LLM" : ""}): ${q.rawLabel.substring(0, 60)}...`,
+        );
+      }
+    }
+
+    return filled;
   }
 
   // ===== REACT-PROOF VALUE SETTER =====
@@ -555,7 +740,7 @@
       }),
     );
 
-    const fields = findBestInputs();
+    const { candidates: fields, unmatched } = findBestInputs();
     let filled = 0;
     const log = [];
 
@@ -684,12 +869,23 @@
       }
     }
 
-    console.log(`[JobBot] === Filled ${filled} fields: ${log.join(", ")} ===`);
+    console.log(
+      `[JobBot] === Filled ${filled} standard fields: ${log.join(", ")} ===`,
+    );
+
+    fillCustomQuestions(profile, unmatched).then((customFilled) => {
+      if (customFilled > 0) {
+        console.log(
+          `[JobBot] === Filled ${customFilled} custom questions ===`,
+        );
+      }
+    });
+
     return filled;
   }
 
   function pasteCoverLetter(text) {
-    const fields = findBestInputs();
+    const { candidates: fields } = findBestInputs();
     if (fields.coverLetter) {
       return setInputValue(fields.coverLetter, text);
     }

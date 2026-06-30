@@ -1,85 +1,34 @@
-Here's the full fix:
-1. Fix getAllTextClues — Search Labels Inside the Same Wrapper
-Replace your getAllTextClues with this version that scans the container for labels:
+1. Detect & Isolate Custom Questions Before Standard Matching
+Add this at the top of content.js (before findBestInputs):
 JavaScript
-function getAllTextClues(el) {
-    const clues = [];
-    const add = (s) => { if (s) clues.push(s.toLowerCase().trim()); };
-
-    // Direct attributes
-    add(el.placeholder);
-    add(el.name);
-    add(el.id);
-    add(el.getAttribute('aria-label'));
-    add(el.getAttribute('data-testid'));
-    add(el.getAttribute('automation-id'));
-    add(el.getAttribute('data-automation-id'));
-    add(el.getAttribute('aria-labelledby'));
-    add(el.getAttribute('aria-describedby'));
-
-    // Type hint
-    if (el.type && el.type !== 'text') add(el.type);
-
-    // Associated labels (by for=id match)
-    if (el.labels) Array.from(el.labels).forEach(l => add(l.innerText));
-
-    // aria-labelledby / aria-describedby dereference
-    ['aria-labelledby', 'aria-describedby'].forEach(attr => {
-        const ids = el.getAttribute(attr);
-        if (ids) {
-            ids.split(/\s+/).forEach(id => {
-                const el2 = document.getElementById(id);
-                if (el2) add(el2.innerText);
-            });
-        }
-    });
-
-    // Parent chain (up to 4 levels)
-    let parent = el.parentElement;
-    for (let i = 0; i < 4 && parent; i++) {
-        if (parent.tagName === 'LABEL') add(parent.innerText);
-        const labelChild = parent.querySelector('label, .label, [class*="label"]');
-        if (labelChild && labelChild !== el) add(labelChild.innerText);
-        parent = parent.parentElement;
+function isLikelyCustomQuestion(el) {
+    if (el.tagName !== 'TEXTAREA' && (el.type !== 'text' || !el.maxLength || el.maxLength < 200)) {
+        return false;
     }
-
-    // Previous siblings
-    let prev = el.previousElementSibling;
-    for (let i = 0; i < 3 && prev; i++) {
-        add(prev.innerText);
-        prev = prev.previousElementSibling;
-    }
-
-    // Next siblings (labels sometimes appear after in odd DOM structures)
-    let next = el.nextElementSibling;
-    for (let i = 0; i < 2 && next; i++) {
-        if (next.tagName === 'LABEL' || (next.innerText && next.innerText.length < 100)) {
-            add(next.innerText);
-        }
-        next = next.nextElementSibling;
-    }
-
-    // CRITICAL: Look for ANY label inside the same field wrapper
-    // This catches React/Vue forms where label and input are siblings in a div.space-y-2
-    const container = el.closest('.space-y-2, .form-field, [class*="field"], [class*="form-group"], [class*="FormItem"], div');
-    if (container) {
-        const allLabels = container.querySelectorAll('label, [id*="Question"], [class*="label"], [class*="Label"]');
-        allLabels.forEach(lbl => {
-            if (lbl !== el) add(lbl.innerText);
-        });
-    }
-
-    // Grandparent first line
-    const gp = el.parentElement?.parentElement;
-    if (gp) {
-        const firstLine = gp.innerText?.split('\n')[0]?.trim();
-        if (firstLine && firstLine.length < 100) add(firstLine);
-    }
-
-    return clues.filter(c => c.length > 0);
+    
+    const clues = getAllTextClues(el);
+    const text = clues.join(' ');
+    const placeholder = (el.placeholder || '').toLowerCase();
+    const name = el.name || '';
+    const id = el.id || '';
+    
+    let score = 0;
+    if (/^\d+$/.test(name)) score += 3;                          // Numeric name (10380, 10382)
+    if (/candidateAnswer|customQuestion|question/i.test(id)) score += 3;
+    if (/write your answer|enter your answer|type here|your response/i.test(placeholder)) score += 2;
+    if (text.includes('?')) score += 2;
+    if (/\b(write|describe|tell us|explain|share|brief|detail|answer|introduction|about yourself|background|why|how|what|motivation|challenge|strength|weakness|achievement|note:|please)\b/i.test(text)) score += 2;
+    if (el.tagName === 'TEXTAREA') score += 1;
+    if (el.maxLength > 500) score += 1;
+    
+    // If it has a generic placeholder like "Write your answer" inside a space-y-2 wrapper,
+    // it's almost certainly a custom question
+    const wrapper = el.closest('.space-y-2, [class*="form-item"], [class*="field-wrapper"]');
+    if (wrapper && wrapper.querySelector('label')?.innerText.length > 50) score += 1;
+    
+    return score >= 3;
 }
-2. Update findBestInputs to Return Unmatched Fields
-Replace findBestInputs so it returns unmatched inputs for custom question processing:
+Replace findBestInputs with this version that separates custom questions upfront:
 JavaScript
 function findBestInputs() {
     const allInputs = Array.from(document.querySelectorAll('input, textarea, select'));
@@ -90,11 +39,22 @@ function findBestInputs() {
         return style.display !== 'none' && 
                style.visibility !== 'hidden' && 
                rect.width > 5 && rect.height > 5 &&
-               !el.disabled &&
-               !el.readOnly;
+               !el.disabled && !el.readOnly;
     });
 
-    console.log(`[JobBot] Found ${visibleInputs.length} visible inputs out of ${allInputs.length}`);
+    // CRITICAL: Separate custom questions before standard matching
+    const standardInputs = [];
+    const customQuestions = [];
+    
+    for (const el of visibleInputs) {
+        if (isLikelyCustomQuestion(el)) {
+            customQuestions.push(el);
+        } else {
+            standardInputs.push(el);
+        }
+    }
+    
+    console.log(`[JobBot] ${visibleInputs.length} total | ${customQuestions.length} custom questions | ${standardInputs.length} standard`);
 
     const candidates = {};
     const assigned = new Set();
@@ -110,10 +70,8 @@ function findBestInputs() {
     ];
 
     for (const type of types) {
-        let best = null;
-        let bestScore = 0;
-
-        for (const el of visibleInputs) {
+        let best = null, bestScore = 0;
+        for (const el of standardInputs) {
             if (assigned.has(el)) continue;
             const clues = getAllTextClues(el);
             const s = scoreField(clues, type);
@@ -122,150 +80,21 @@ function findBestInputs() {
                 best = el;
             }
         }
-
         if (best && bestScore >= 5) {
             candidates[type] = best;
             assigned.add(best);
-            console.log(`[JobBot] MATCH ${type} (score ${bestScore}): clues=[${getAllTextClues(best).slice(0,4).join(', ')}]`);
+            console.log(`[JobBot] MATCH ${type} (score ${bestScore})`);
         }
     }
 
-    const unmatched = visibleInputs.filter(el => !assigned.has(el));
-    if (unmatched.length > 0) {
-        console.log(`[JobBot] ${unmatched.length} unmatched inputs:`);
-        unmatched.slice(0, 10).forEach(el => {
-            console.log(`  - ${el.tagName} type=${el.type} name=${el.name} id=${el.id} clues=[${getAllTextClues(el).slice(0,3).join(', ')}]`);
-        });
-    }
-
-    return { candidates, unmatched };
+    const unmatched = standardInputs.filter(el => !assigned.has(el));
+    return { candidates, unmatched, customQuestions };
 }
-3. Expand Portfolio & GitHub Patterns
-Add these to scoreField() patterns:
-JavaScript
-portfolio: {
-    strong: [
-        'portfolio', 'portfolio url', 'portfolio website', 
-        'portfolio link', 'portfolioUrl', 'portfolio_url',
-        'personal portfolio', 'your portfolio',
-        'behance', 'dribbble', 'xing', 'profilexing',  // catches name="profilexing"
-        'social profile', 'professional profile'
-    ],
-    weak: ['site', 'url', 'website', 'link', 'profile'],
-    avoid: ['github', 'gitlab', 'company', 'business', 'employer', 'code', 'linkedin']
-},
-github: {
-    strong: [
-        'github', 'gitlab', 'github url', 'gitlab url', 
-        'githubUrl', 'gitlabUrl', 'github_url', 'gitlab_url',
-        'source code', 'code repository'
-    ],
-    weak: ['code', 'repo', 'repository', 'url', 'git'],
-    avoid: ['portfolio', 'website', 'linkedin', 'personal', 'behance', 'xing']
-},
-website: {
-    strong: ['website', 'personal site', 'url', 'web'],
-    weak: ['link', 'site'],
-    avoid: ['linkedin', 'portfolio', 'github', 'gitlab', 'company', 'business', 'behance', 'xing']
-},
-4. Add fillCustomQuestions for Weird/Custom Fields
-Add this function to content.js:
-JavaScript
-async function fillCustomQuestions(profile, unmatchedInputs) {
-    const questions = [];
-    
-    for (const el of unmatchedInputs) {
-        // Only consider textareas and text inputs that look like answer fields
-        if (el.tagName !== 'TEXTAREA' && el.type !== 'text' && el.type !== 'url') continue;
-        
-        const clues = getAllTextClues(el);
-        const labelText = clues.join(' ');
-        
-        // Detect if this looks like a custom question
-        const hasQuestionMark = labelText.includes('?');
-        const hasInstructionWords = /\b(write|describe|tell us|explain|share|what|how|why|please|brief|detail|answer|list)\b/.test(labelText);
-        const hasQuestionWords = /\b(introduction|about yourself|background|experience|salary|compensation|notice|availability|why|motivation|interest|challenge|strength|weakness|achievement|fit|qualification|project|skill)\b/.test(labelText);
-        
-        const isCustomQuestion = hasQuestionMark || (hasInstructionWords && hasQuestionWords);
-        const isLargeField = el.tagName === 'TEXTAREA' || (el.maxLength && el.maxLength > 200) || (el.placeholder && el.placeholder.length > 30);
-        
-        if (isCustomQuestion && isLargeField) {
-            let qType = 'general';
-            const text = labelText;
-            
-            if (/\b(introduction|about yourself|background|bio|tell me about|who are you|describe yourself)\b/.test(text)) qType = 'introduction';
-            else if (/\b(salary|compensation|pay|ctc|expected|desired.*monthly|desired.*yearly|monthly salary|yearly salary|pay range|remuneration)\b/.test(text)) qType = 'salary';
-            else if (/\b(why.*company|why.*role|why.*apply|motivation|interest.*role|interest.*company|why do you want)\b/.test(text)) qType = 'motivation';
-            else if (/\b(availability|notice|start.*date|when.*join|when.*start|how soon|available from)\b/.test(text)) qType = 'availability';
-            else if (/\b(cover.*letter|additional.*info|anything else|supplement|message)\b/.test(text)) qType = 'cover';
-            else if (/\b(experience.*relevant|relevant.*experience|why.*fit|why.*qualified|match.*role)\b/.test(text)) qType = 'fit';
-            
-            questions.push({ element: el, question: labelText, type: qType, rawLabel: clues[0] || labelText });
-        }
-    }
-    
-    if (questions.length === 0) return 0;
-    
-    let filled = 0;
-    for (const q of questions) {
-        let answer = '';
-        let usedLLM = false;
-        
-        // Fast path: pre-computed answers (no LLM call)
-        if (q.type === 'salary' && profile.expected_ctc) {
-            answer = profile.expected_ctc;
-            // If question asks for USD monthly, use pre-computed USD field if available
-            if (/monthly.*usd|usd.*month|\$.*month|per.*month.*usd/.test(q.question) && profile.expected_salary_usd_monthly) {
-                answer = profile.expected_salary_usd_monthly;
-            }
-        } else if (q.type === 'availability' && profile.notice_period_weeks !== undefined) {
-            answer = (profile.notice_period_weeks === '0' || profile.notice_period_weeks === 0) 
-                ? 'Immediate' 
-                : `${profile.notice_period_weeks} weeks`;
-        } else if (q.type === 'introduction' && profile.custom_answers?.introduction) {
-            answer = profile.custom_answers.introduction;
-        } else if (q.type === 'motivation' && profile.custom_answers?.motivation) {
-            answer = profile.custom_answers.motivation;
-        } else {
-            // LLM fallback for complex/unrecognized questions
-            usedLLM = true;
-            try {
-                const result = await apiRequest('POST', `${SERVER}/answer-question`, {
-                    profile: profile,
-                    question: q.rawLabel,
-                    question_type: q.type
-                });
-                if (result && !result.error && result.answer) {
-                    answer = result.answer;
-                }
-            } catch (e) {
-                console.error('[JobBot] Custom question LLM failed:', e);
-            }
-        }
-        
-        if (answer && setInputValue(q.element, answer)) {
-            filled++;
-            console.log(`[JobBot] Filled custom question (${q.type}${usedLLM ? '-LLM' : ''}): ${q.rawLabel.substring(0, 60)}...`);
-        }
-    }
-    
-    return filled;
-}
-5. Update fillForm to Wire It All Together
-Replace fillForm with this version that calls fillCustomQuestions at the end:
+Update fillForm to receive and pass customQuestions:
 JavaScript
 function fillForm(profile) {
     console.log('[JobBot] === Starting form fill ===');
-    console.log('[JobBot] Profile:', JSON.stringify({
-        name: profile.name,
-        email: profile.email,
-        phone: profile.phone,
-        portfolio: profile.portfolio,
-        github: profile.github,
-        linkedin: profile.linkedin
-    }));
-
-    const { candidates: fields, unmatched } = findBestInputs();
+    const { candidates: fields, unmatched, customQuestions } = findBestInputs();
     let filled = 0;
     const log = [];
 
@@ -286,130 +115,215 @@ function fillForm(profile) {
     if (fields.email && profile.email) {
         if (setInputValue(fields.email, profile.email)) { filled++; log.push('email'); }
     }
-
     if (fields.phone && profile.phone && !profile.phone.includes('@')) {
         if (setInputValue(fields.phone, profile.phone)) { filled++; log.push('phone'); }
     }
-
     if (fields.currentRole && profile.current_role) {
         if (setInputValue(fields.currentRole, profile.current_role)) { filled++; log.push('currentRole'); }
     }
-
     if (fields.yearsExperience && profile.years_experience) {
         if (setInputValue(fields.yearsExperience, profile.years_experience)) { filled++; log.push('yearsExperience'); }
     }
-
     if (fields.location && profile.location) {
         if (setInputValue(fields.location, profile.location)) { filled++; log.push('location'); }
     }
-
     if (fields.expectedCtc && profile.expected_ctc) {
         if (setInputValue(fields.expectedCtc, profile.expected_ctc)) { filled++; log.push('expectedCtc'); }
     }
-
     if (fields.noticePeriod && profile.notice_period_weeks !== undefined && profile.notice_period_weeks !== '') {
         if (setInputValue(fields.noticePeriod, profile.notice_period_weeks)) { filled++; log.push('noticePeriod'); }
     }
-
     if (fields.referralSource && profile.referral_source) {
         if (setInputValue(fields.referralSource, profile.referral_source)) { filled++; log.push('referralSource'); }
     }
-
     if (fields.linkedin && profile.linkedin) {
         if (setInputValue(fields.linkedin, profile.linkedin)) { filled++; log.push('linkedin'); }
     }
-
     if (fields.portfolio && profile.portfolio) {
         if (setInputValue(fields.portfolio, profile.portfolio)) { filled++; log.push('portfolio'); }
     }
-
     if (fields.github && profile.github) {
         if (setInputValue(fields.github, profile.github)) { filled++; log.push('github'); }
     }
-
-    // Generic website fallback only if no specific fields matched
     if (fields.website && !fields.portfolio && !fields.github) {
         const webUrl = profile.portfolio || profile.website || profile.github || '';
-        if (webUrl) {
-            if (setInputValue(fields.website, webUrl)) { filled++; log.push('website'); }
-        }
+        if (webUrl && setInputValue(fields.website, webUrl)) { filled++; log.push('website'); }
     }
 
     console.log(`[JobBot] === Filled ${filled} standard fields: ${log.join(', ')} ===`);
 
-    // Now handle custom questions
-    fillCustomQuestions(profile, unmatched).then(customFilled => {
-        if (customFilled > 0) {
-            console.log(`[JobBot] === Filled ${customFilled} custom questions ===`);
-        }
-    });
+    // Now handle custom questions with proper answers
+    if (customQuestions.length > 0) {
+        fillCustomQuestions(profile, customQuestions).then(cf => {
+            console.log(`[JobBot] === Filled ${cf} custom questions ===`);
+        });
+    }
 
     return filled;
 }
-6. Add Server Endpoint for LLM Custom Answers
-Add this to server.py:
-Python
-@app.post("/answer-question")
-async def answer_question(payload: dict):
-    profile = payload.get("profile", {})
-    question = payload.get("question", "")
-    q_type = payload.get("question_type", "general")
+2. Smarter fillCustomQuestions with Format Awareness
+Replace fillCustomQuestions with this version that generates proper paragraph answers and handles currency:
+JavaScript
+async function fillCustomQuestions(profile, customQuestions) {
+    let filled = 0;
     
-    raw = profile.get("raw_bio", "") or profile.get("raw", "")
-    expected_ctc = profile.get("expected_ctc", "")
-    notice = profile.get("notice_period_weeks", "")
-    current_role = profile.get("current_role", "")
-    years = profile.get("years_experience", "")
-    name = profile.get("name", "the applicant")
+    for (const el of customQuestions) {
+        const clues = getAllTextClues(el);
+        const labelText = clues.join(' ');
+        const lowerLabel = labelText.toLowerCase();
+        
+        let answer = '';
+        let source = 'unknown';
+        
+        // 1. INTRODUCTION / ABOUT YOURSELF
+        if (/\b(introduction|about yourself|background|bio|tell me about|who are you|describe yourself)\b/i.test(lowerLabel)) {
+            if (profile.custom_answers?.introduction) {
+                answer = profile.custom_answers.introduction;
+                source = 'pre-canned';
+            } else {
+                answer = generateIntroduction(profile);
+                source = 'generated';
+            }
+        }
+        // 2. SALARY (USD MONTHLY)
+        else if (/\b(monthly salary|salary range.*usd|usd.*month|desired monthly|per month|monthly.*range)\b/i.test(lowerLabel)) {
+            if (profile.expected_salary_usd_monthly) {
+                answer = profile.expected_salary_usd_monthly;
+                source = 'pre-canned-usd-monthly';
+            } else if (profile.expected_ctc) {
+                // Rough conversion: 18 LPA INR ≈ $1800/month, 24 LPA ≈ $2400/month
+                answer = `I'm looking for a range of $1,800 - $2,400 per month, which aligns with my current experience level and the scope of this role.`;
+                source = 'converted-estimate';
+            }
+        }
+        // 3. SALARY (USD YEARLY or generic)
+        else if (/\b(salary|compensation|ctc|pay range|desired salary|expected.*salary)\b/i.test(lowerLabel)) {
+            if (profile.expected_salary_usd_yearly) {
+                answer = profile.expected_salary_usd_yearly;
+                source = 'pre-canned-usd-yearly';
+            } else if (profile.expected_ctc) {
+                answer = profile.expected_ctc;
+                source = 'pre-canned-inr';
+            }
+        }
+        // 4. AVAILABILITY / NOTICE
+        else if (/\b(availability|notice period|start date|joining|how soon|available from)\b/i.test(lowerLabel)) {
+            const notice = profile.notice_period_weeks;
+            if (notice === '0' || notice === 0 || notice === 'Immediate') {
+                answer = "I can start immediately.";
+            } else {
+                answer = `I have a ${notice}-week notice period with my current employer, so I can join after that.`;
+            }
+            source = 'computed';
+        }
+        // 5. WHY THIS COMPANY / MOTIVATION
+        else if (/\b(why.*company|why.*role|why.*apply|motivation|interest.*role|interest.*company|why do you want)\b/i.test(lowerLabel)) {
+            if (profile.custom_answers?.motivation) {
+                answer = profile.custom_answers.motivation;
+                source = 'pre-canned';
+            } else {
+                answer = "I'm looking for a team where I can own features end-to-end and work with modern stacks. This role seems to line up with what I've been building lately.";
+                source = 'generic';
+            }
+        }
+        // 6. COVER LETTER / ADDITIONAL INFO
+        else if (/\b(cover letter|additional info|anything else|supplement|message|additional information)\b/i.test(lowerLabel)) {
+            if (profile.custom_answers?.cover_letter) {
+                answer = profile.custom_answers.cover_letter;
+                source = 'pre-canned';
+            } else {
+                // Skip - user should generate via panel
+                continue;
+            }
+        }
+        // 7. GENERIC FALLBACK - LLM
+        else {
+            try {
+                const result = await apiRequest('POST', `${SERVER}/answer-question`, {
+                    profile: profile,
+                    question: clues[0] || labelText,
+                    question_type: 'general'
+                });
+                if (result && !result.error && result.answer) {
+                    answer = result.answer;
+                    source = 'llm';
+                }
+            } catch (e) {
+                console.error('[JobBot] LLM fallback failed:', e);
+                continue;
+            }
+        }
+        
+        // Respect word count hints
+        const wordMatch = labelText.match(/(\d+)\s*-\s*(\d+)\s*words?/i);
+        if (wordMatch && answer.split(/\s+/).length < parseInt(wordMatch[1])) {
+            // If pre-canned is too short, expand with LLM
+            if (source === 'pre-canned' || source === 'generated') {
+                try {
+                    const result = await apiRequest('POST', `${SERVER}/expand-answer`, {
+                        answer: answer,
+                        target_words: parseInt(wordMatch[2]),
+                        question: labelText
+                    });
+                    if (result?.answer) answer = result.answer;
+                } catch (e) {}
+            }
+        }
+        
+        if (answer && setInputValue(el, answer)) {
+            filled++;
+            console.log(`[JobBot] Custom question (${source}): ${labelText.substring(0, 50)}...`);
+        }
+    }
+    
+    return filled;
+}
 
-    # Pre-computed fast answers (avoid LLM call)
-    if q_type == "salary" and expected_ctc:
-        return {"answer": expected_ctc}
-    if q_type == "availability" and notice:
-        return {"answer": "Immediate" if notice in ("0", 0, "0 weeks") else f"{notice} weeks"}
-
-    prompt = f"""You are {name}, a practical engineer answering a job application question. 
-Write like you talk to a colleague. No corporate buzzwords.
+function generateIntroduction(profile) {
+    const raw = profile.raw_bio || '';
+    const role = profile.current_role || 'Developer';
+    const years = profile.years_experience || '';
+    const skills = profile.skills || '';
+    
+    // Extract first paragraph of raw bio if it's good
+    const firstPara = raw.split('\n\n')[0];
+    if (firstPara && firstPara.length > 100 && firstPara.length < 800) {
+        return firstPara;
+    }
+    
+    return `${profile.name} — ${role} with ${years}+ years shipping production systems. I've built platforms from scratch, handled zero-downtime deployments, and migrated legacy stacks. I work end-to-end and prefer shipping over meetings.`;
+}
+Add to server.py (new endpoint for expanding short answers):
+Python
+@app.post("/expand-answer")
+async def expand_answer(payload: dict):
+    answer = payload.get("answer", "")
+    target = payload.get("target_words", 150)
+    question = payload.get("question", "")
+    
+    prompt = f"""Expand the following answer to roughly {target} words. Keep the same tone and facts. Do not add fluff or buzzwords.
 
 Question: {question}
+Current answer ({len(answer.split())} words): {answer}
 
-Your background:
-{raw[:1500]}
-
-Current role: {current_role}
-Years of experience: {years}
-Expected CTC: {expected_ctc}
-Notice period: {notice}
-
-Rules:
-- Answer naturally and directly. No fluff.
-- Don't use: passionate, results-driven, innovative, dynamic, leveraging, holistic, synergy, proactive.
-- Stick to facts from your background. Don't invent experience.
-- If the question asks for a word count, respect it.
-- If it's about salary, state your range clearly.
-- If it's about availability, be direct.
-- Write only the answer text. No preamble like "Here is my answer:"""
+Write only the expanded answer. No preamble."""
 
     try:
-        async with httpx.AsyncClient(timeout=config.llm_timeout) as client:
+        async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
                 config.llm_api,
                 json={
                     "model": config.llm_model,
                     "prompt": prompt,
                     "stream": False,
-                    "options": {"temperature": 0.4, "top_p": 0.9}
+                    "options": {"temperature": 0.4}
                 },
             )
             text = r.json().get("response", "").strip()
-            # Strip any wrapping quotes or markdown
-            text = re.sub(r'^["\']{1,2}|["\']{1,2}$', '', text)
-            text = re.sub(r'^```\w*\n?|\n?```$', '', text)
             return {"answer": text}
     except Exception as e:
         return {"error": str(e)}
-7. Update resume.json with Optional Fast-Path Fields
-Add these optional fields for common custom questions so the extension can fill them without LLM latency:
+3. Update resume.json with USD Conversions & Pre-Canned Answers
 JSON
 {
   "name": "Aryan Sahu",
@@ -425,20 +339,164 @@ JSON
   "portfolio": "https://dev-portfolio-4d2.pages.dev/",
   "notice_period_weeks": "0",
   "expected_ctc": "18-24 LPA INR",
-  "expected_salary_usd_monthly": "$1,800 - $2,400",
+  "expected_salary_usd_monthly": "$1,800 - $2,400 per month",
+  "expected_salary_usd_yearly": "$22,000 - $29,000 per year",
   "referral_source": "LinkedIn",
+  "skills": "React, Next.js, TypeScript, Node.js, PostgreSQL, AWS, Python",
   "custom_answers": {
-    "introduction": "Aryan Sahu — Full Stack Developer with 3+ years shipping production systems. I've built platforms from scratch (React, Node, PostgreSQL, AWS), handled zero-downtime deployments, and migrated legacy stacks to Next.js. I work end-to-end and prefer shipping over meetings.",
-    "motivation": "I'm looking for teams where I can own features end-to-end and work with modern stacks. Your role lines up with what I've been building lately."
+    "introduction": "I'm Aryan Sahu, a Full Stack Developer with 3.5 years of production experience building and shipping web applications at scale. I've delivered features for enterprise clients supporting 10M+ daily transactions, and I'm currently architecting Next.js systems for a Dubai-based startup. I handle everything from React frontends and Node APIs to PostgreSQL schema design and AWS/Nginx deployments. I like owning the full stack and prefer shipping working code over writing lengthy specs.",
+    "motivation": "I'm looking for teams where I can own features end-to-end and work with modern stacks. Your role lines up with what I've been building lately — particularly the Next.js and Node.js infrastructure work.",
+    "cover_letter": ""
   },
   "raw_bio": "Full Stack Developer with 3+ years of production experience..."
 }
+4. Modern UI Panel
+Replace createPanel with this glassmorphism design:
+JavaScript
+function createPanel() {
+    if (panel) return panel;
+    
+    const div = document.createElement('div');
+    div.id = 'jobbot-panel';
+    div.innerHTML = `
+        <div id="jb-header" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid rgba(148,163,184,0.15);cursor:move;user-select:none;">
+            <div style="display:flex;align-items:center;gap:10px;">
+                <div style="width:32px;height:32px;border-radius:8px;background:linear-gradient(135deg,#6366f1,#8b5cf6);display:flex;align-items:center;justify-content:center;font-size:15px;box-shadow:0 2px 8px rgba(99,102,241,0.3);">⚡</div>
+                <div>
+                    <div style="font-size:15px;font-weight:600;color:#f8fafc;letter-spacing:-0.01em;">JobBot</div>
+                    <div style="font-size:11px;color:#64748b;margin-top:1px;">Auto-fill assistant</div>
+                </div>
+            </div>
+            <button id="jb-close" style="background:rgba(255,255,255,0.05);border:none;color:#94a3b8;cursor:pointer;font-size:18px;width:28px;height:28px;border-radius:6px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;">×</button>
+        </div>
+        
+        <div id="jb-status" style="display:flex;align-items:center;gap:8px;font-size:12px;color:#94a3b8;margin-bottom:14px;padding:8px 10px;background:rgba(15,23,42,0.6);border-radius:8px;border:1px solid rgba(255,255,255,0.05);">
+            <span id="jb-status-dot" style="width:7px;height:7px;border-radius:50%;background:#ef4444;transition:background 0.3s;"></span>
+            <span id="jb-status-text">Server: checking...</span>
+        </div>
+        
+        <div style="display:flex;flex-direction:column;gap:8px;">
+            <button id="jb-fill" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px;background:linear-gradient(135deg,#3b82f6,#6366f1);color:white;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s;box-shadow:0 2px 8px rgba(59,130,246,0.25);letter-spacing:-0.01em;">
+                <span style="font-size:14px;">🚀</span> Fill Profile
+            </button>
+            
+            <button id="jb-cover" style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:10px;background:rgba(255,255,255,0.04);color:#e2e8f0;border:1px solid rgba(255,255,255,0.08);border-radius:8px;cursor:pointer;font-size:13px;font-weight:500;transition:all 0.15s;letter-spacing:-0.01em;">
+                <span style="font-size:14px;">✍️</span> Generate Cover Letter
+            </button>
+        </div>
+        
+        <div id="jb-cover-box" style="display:none;margin-top:14px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;">Cover Letter</div>
+                <div id="jb-cover-meta" style="font-size:10px;color:#475569;"></div>
+            </div>
+            <textarea id="jb-cover-text" style="width:100%;height:150px;background:rgba(15,23,42,0.5);color:#e2e8f0;border:1px solid rgba(255,255,255,0.08);border-radius:8px;padding:10px;font-size:12px;line-height:1.6;resize:vertical;font-family:system-ui,sans-serif;outline:none;" placeholder="Click 'Generate' to create a cover letter..."></textarea>
+            <div style="display:flex;gap:8px;margin-top:10px;">
+                <button id="jb-paste" style="flex:1;padding:8px;background:#6366f1;color:white;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:500;transition:all 0.15s;display:flex;align-items:center;justify-content:center;gap:6px;">
+                    <span>📋</span> Paste into Form
+                </button>
+                <button id="jb-copy" style="padding:8px 12px;background:rgba(255,255,255,0.05);color:#94a3b8;border:1px solid rgba(255,255,255,0.08);border-radius:6px;cursor:pointer;font-size:12px;transition:all 0.15s;" title="Copy to clipboard">📋</button>
+            </div>
+        </div>
+        
+        <div id="jb-log" style="margin-top:14px;padding-top:12px;border-top:1px solid rgba(148,163,184,0.12);font-size:11px;color:#47548b;max-height:120px;overflow-y:auto;font-family:'SF Mono',monospace;line-height:1.5;"></div>
+    `;
+    
+    div.style.cssText = `
+        position:fixed;bottom:24px;right:24px;width:320px;
+        background:rgba(15,23,42,0.88);color:#e2e8f0;
+        border:1px solid rgba(255,255,255,0.06);
+        border-radius:16px;padding:18px;
+        font-family:system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+        font-size:13px;z-index:999999;
+        box-shadow:0 25px 50px -12px rgba(0,0,0,0.5),0 0 0 1px rgba(255,255,255,0.04);
+        backdrop-filter:blur(16px) saturate(1.2);
+        line-height:1.4;
+        transition:opacity 0.2s,transform 0.2s;
+    `;
+    
+    document.body.appendChild(div);
+    panel = div;
+
+    // Hover effects via JS (avoid inline CSS complexity)
+    const closeBtn = document.getElementById('jb-close');
+    closeBtn.onmouseenter = () => { closeBtn.style.background = 'rgba(255,255,255,0.1)'; closeBtn.style.color = '#f8fafc'; };
+    closeBtn.onmouseleave = () => { closeBtn.style.background = 'rgba(255,255,255,0.05)'; closeBtn.style.color = '#94a3b8'; };
+    closeBtn.onclick = () => { div.style.display = 'none'; };
+
+    const fillBtn = document.getElementById('jb-fill');
+    fillBtn.onmouseenter = () => { fillBtn.style.transform = 'translateY(-1px)'; fillBtn.style.boxShadow = '0 4px 12px rgba(59,130,246,0.35)'; };
+    fillBtn.onmouseleave = () => { fillBtn.style.transform = 'translateY(0)'; fillBtn.style.boxShadow = '0 2px 8px rgba(59,130,246,0.25)'; };
+    
+    const coverBtn = document.getElementById('jb-cover');
+    coverBtn.onmouseenter = () => { coverBtn.style.background = 'rgba(255,255,255,0.08)'; };
+    coverBtn.onmouseleave = () => { coverBtn.style.background = 'rgba(255,255,255,0.04)'; };
+
+    fillBtn.onclick = async () => {
+        fillBtn.textContent = 'Filling...';
+        const profile = await fetchProfile();
+        if (!profile) {
+            alert('JobBot: Cannot reach local server. Run: uv run python src/server.py');
+            fillBtn.innerHTML = '<span style="font-size:14px;">🚀</span> Fill Profile';
+            return;
+        }
+        const filled = fillForm(profile);
+        fillBtn.innerHTML = `<span style="font-size:14px;">✅</span> Filled ${filled} fields`;
+        setTimeout(() => fillBtn.innerHTML = '<span style="font-size:14px;">🚀</span> Fill Profile', 2500);
+    };
+
+    coverBtn.onclick = async () => {
+        coverBtn.innerHTML = '<span style="font-size:14px;">⏳</span> Generating...';
+        const h1 = document.querySelector('h1, h2');
+        const title = h1 ? h1.innerText.trim() : document.title;
+        const company = document.querySelector('[class*="company"], [class*="employer"]')?.innerText.trim() || '';
+        const result = await generateLetter(title, company);
+        
+        if (!result || result.error || !result.cover_letter) {
+            alert('JobBot: Cover letter generation failed. Is Ollama running?');
+            coverBtn.innerHTML = '<span style="font-size:14px;">✍️</span> Generate Cover Letter';
+            return;
+        }
+        
+        document.getElementById('jb-cover-text').value = result.cover_letter;
+        document.getElementById('jb-cover-box').style.display = 'block';
+        document.getElementById('jb-cover-meta').textContent = `${result.cover_letter.split(/\s+/).length} words`;
+        coverBtn.innerHTML = '<span style="font-size:14px;">🔄</span> Regenerate';
+    };
+
+    document.getElementById('jb-paste').onclick = () => {
+        const text = document.getElementById('jb-cover-text').value;
+        const ok = pasteCoverLetter(text);
+        const btn = document.getElementById('jb-paste');
+        btn.innerHTML = ok ? '<span>✅</span> Pasted!' : '<span>❌</span> No field found';
+        setTimeout(() => btn.innerHTML = '<span>📋</span> Paste into Form', 2000);
+    };
+
+    document.getElementById('jb-copy').onclick = () => {
+        const text = document.getElementById('jb-cover-text').value;
+        navigator.clipboard.writeText(text).then(() => {
+            const btn = document.getElementById('jb-copy');
+            btn.textContent = '✅';
+            setTimeout(() => btn.textContent = '📋', 1500);
+        });
+    };
+
+    apiRequest('GET', `${SERVER}/`).then(() => {
+        document.getElementById('jb-status-dot').style.background = '#10b981';
+        document.getElementById('jb-status-text').textContent = 'Server: connected';
+    }).catch(() => {
+        document.getElementById('jb-status-dot').style.background = '#ef4444';
+        document.getElementById('jb-status-text').textContent = 'Server: offline';
+    });
+
+    console.log('[JobBot] Panel created');
+    return div;
+}
 Summary of What This Fixes
 Table
-Field	Why It Failed	Fix
-Behance / Portfolio (name="profilexing")	Label was sibling in wrapper div, not parent/previous sibling. name was profilexing — no pattern matched.	getAllTextClues now scans all labels inside the same container. Added profilexing, xing, behance to portfolio.strong.
-Current Location (name="currentLocation")	camelCase name didn't match spaced patterns.	Added camelCase variants (currentLocation) to location.strong.
-Expected CTC (name="salaryExpectation")	camelCase combined word wasn't in patterns.	Added salaryExpectation, expectedCompensation to expectedCtc.strong.
-Custom intro question (name="10380")	Numeric name, no keyword match possible.	fillCustomQuestions detects it by label text ("write a brief introduction") and fills via fast-path custom_answers.introduction or LLM.
-Custom salary question (name="10382")	Numeric name, label asks for USD monthly.	Detected as salary type. Uses expected_salary_usd_monthly if available, otherwise falls back to expected_ctc or LLM.
-GitHub got portfolio URL	website pattern matched both fields; no separate github type existed.
+Issue	Root Cause	Fix
+Introduction got "3.5"	yearsExperience pattern matched the label "your experience" and stole the textarea before custom logic ran	isLikelyCustomQuestion now detects textareas with numeric names, generic IDs, and question-like labels, and removes them from standard matching before findBestInputs runs
+Salary got "18-24 LPA INR"	expectedCtc pattern matched "salary" in the label and filled raw profile value	Same isolation as above. Plus new logic detects "USD monthly" and serves $1,800-$2,400 instead
+Answers too short	Pre-canned intro was missing from resume.json	Added custom_answers.introduction with a proper 50-word paragraph. Added /expand-answer endpoint for LLM expansion if word count hints are present
+UI looked basic	Basic dark box with no polish	Glassmorphism backdrop, gradients, hover states, copy button, word count meta, better spacing
+The key architectural change: custom questions are detected and quarantined before any standard field scoring happens. This guarantees they never get polluted by raw profile values.
